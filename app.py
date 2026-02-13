@@ -1,492 +1,246 @@
 import io
 from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
-# Page config
+# ---------------- PAGE CONFIG ---------------- #
+
 st.set_page_config(
     page_title="Amazon Ads Automation Tool",
     page_icon="🚀",
     layout="wide",
 )
 
-# Custom CSS focused on readability in dark and light themes
-st.markdown(
-    """
-    <style>
-    .main {
-        padding-top: 1.5rem;
-    }
+st.title("🚀 Amazon Ads Automation Tool")
+st.caption("AI-Powered PPC Optimization Platform")
+st.markdown("---")
 
-    /* Metric cards */
-    div[data-testid="stMetric"] {
-        background: rgba(30, 41, 59, 0.65);
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        border-radius: 12px;
-        padding: 0.9rem 1rem;
-        min-height: 92px;
-    }
 
-    div[data-testid="stMetricLabel"] {
-        color: #cbd5e1 !important;
-        font-weight: 600;
-        font-size: 0.85rem;
-    }
+# ---------------- HELPER FUNCTIONS ---------------- #
 
-    div[data-testid="stMetricValue"] {
-        color: #f8fafc !important;
-        font-weight: 700;
-        font-size: 1.35rem;
-    }
+def normalize_columns(df):
+    df.columns = df.columns.str.strip()
+    return df
 
-    div[data-testid="stMetricDelta"] {
-        color: #22c55e !important;
-        font-weight: 600;
-    }
 
-    /* Alert boxes */
-    .success-box,
-    .warning-box,
-    .danger-box {
-        padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin: 0.8rem 0;
-        font-weight: 500;
-    }
+def find_column(df, keyword):
+    for col in df.columns:
+        if keyword.lower() in col.lower():
+            return col
+    return None
 
-    .success-box {
-        background: rgba(22, 163, 74, 0.15);
-        border-left: 5px solid #22c55e;
-        color: #dcfce7;
-    }
 
-    .warning-box {
-        background: rgba(234, 179, 8, 0.15);
-        border-left: 5px solid #facc15;
-        color: #fef9c3;
-    }
+def safe_numeric(series):
+    return pd.to_numeric(series, errors="coerce").fillna(0)
 
-    .danger-box {
-        background: rgba(220, 38, 38, 0.16);
-        border-left: 5px solid #ef4444;
-        color: #fee2e2;
-    }
 
-    /* Tables readability */
-    [data-testid="stDataFrame"] {
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        border-radius: 10px;
-        overflow: hidden;
-    }
+# ---------------- FILE UPLOAD ---------------- #
 
-    /* Section spacing */
-    h1, h2, h3 {
-        letter-spacing: 0.2px;
-    }
-    </style>
-""",
-    unsafe_allow_html=True,
+with st.sidebar:
+    st.header("📁 Upload Reports")
+    uploaded_files = st.file_uploader(
+        "Upload one or more Search Term Reports",
+        type=["xlsx", "xls"],
+        accept_multiple_files=True,
+    )
+
+if not uploaded_files:
+    st.info("👈 Upload one or more Amazon Search Term Reports to get started")
+    st.stop()
+
+# ---------------- LOAD MULTIPLE ACCOUNTS ---------------- #
+
+all_dfs = []
+
+for file in uploaded_files:
+    try:
+        df = pd.read_excel(file)
+        df = normalize_columns(df)
+        df["Account Name"] = file.name
+        all_dfs.append(df)
+    except Exception as e:
+        st.error(f"Error reading file {file.name}: {e}")
+
+if not all_dfs:
+    st.stop()
+
+df = pd.concat(all_dfs, ignore_index=True)
+
+# ---------------- FLEXIBLE COLUMN DETECTION ---------------- #
+
+customer_col = find_column(df, "customer search")
+spend_col = find_column(df, "spend")
+clicks_col = find_column(df, "click")
+impression_col = find_column(df, "impression")
+sales_col = find_column(df, "sales")
+orders_col = find_column(df, "order")
+cpc_col = find_column(df, "cost per click")
+ctr_col = find_column(df, "ctr")
+campaign_col = find_column(df, "campaign")
+adgroup_col = find_column(df, "ad group")
+matchtype_col = find_column(df, "match")
+
+required_cols = {
+    "Customer Search Term": customer_col,
+    "Spend": spend_col,
+    "Clicks": clicks_col,
+}
+
+missing = [k for k, v in required_cols.items() if v is None]
+
+if missing:
+    st.error(f"❌ Missing required columns: {', '.join(missing)}")
+    st.write("Available columns in file:")
+    st.write(df.columns.tolist())
+    st.stop()
+
+# Rename dynamically
+df.rename(columns={
+    customer_col: "Customer Search Term",
+    spend_col: "Spend",
+    clicks_col: "Clicks"
+}, inplace=True)
+
+# Convert numeric safely
+df["Spend"] = safe_numeric(df["Spend"])
+df["Clicks"] = safe_numeric(df["Clicks"])
+
+if impression_col:
+    df["Impressions"] = safe_numeric(df[impression_col])
+else:
+    df["Impressions"] = 0
+
+if sales_col:
+    df["Sales"] = safe_numeric(df[sales_col])
+else:
+    df["Sales"] = 0
+
+if orders_col:
+    df["Orders"] = safe_numeric(df[orders_col])
+else:
+    df["Orders"] = 0
+
+if cpc_col:
+    df["CPC"] = safe_numeric(df[cpc_col])
+else:
+    df["CPC"] = 0
+
+if ctr_col:
+    df["CTR"] = df[ctr_col].astype(str).str.replace("%", "")
+    df["CTR"] = safe_numeric(df["CTR"]) / 100
+else:
+    df["CTR"] = 0
+
+if campaign_col:
+    df["Campaign"] = df[campaign_col]
+else:
+    df["Campaign"] = ""
+
+if adgroup_col:
+    df["Ad Group"] = df[adgroup_col]
+else:
+    df["Ad Group"] = ""
+
+if matchtype_col:
+    df["Match Type"] = df[matchtype_col]
+else:
+    df["Match Type"] = ""
+
+# ---------------- ACCOUNT FILTER ---------------- #
+
+account_filter = st.selectbox(
+    "Select Account",
+    ["All Accounts"] + df["Account Name"].unique().tolist()
 )
 
+if account_filter != "All Accounts":
+    df = df[df["Account Name"] == account_filter]
 
-class AmazonAdsAnalyzer:
-    """Core analysis engine for Amazon search term reports"""
+st.success(f"✅ Successfully analyzed {len(df)} keywords")
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self._normalize_column_names()
-        self._clean_data()
+# ---------------- OVERVIEW METRICS ---------------- #
 
-    def _normalize_column_names(self):
-        """Normalize column names to handle variations"""
-        self.df.columns = self.df.columns.str.strip()
+total_spend = df["Spend"].sum()
+total_sales = df["Sales"].sum()
+total_clicks = df["Clicks"].sum()
+total_impressions = df["Impressions"].sum()
+total_orders = df["Orders"].sum()
 
-        column_mapping = {}
-        for col in self.df.columns:
-            col_lower = col.lower().strip()
+avg_cpc = df["CPC"].mean() if total_clicks > 0 else 0
+avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+overall_roas = total_sales / total_spend if total_spend > 0 else 0
+overall_acos = (total_spend / total_sales * 100) if total_sales > 0 else 0
+conversion_rate = (total_orders / total_clicks * 100) if total_clicks > 0 else 0
 
-            if "acos" in col_lower and "total" in col_lower:
-                column_mapping[col] = "Total Advertising Cost of Sales (ACOS)"
-            elif "roas" in col_lower and "total" in col_lower:
-                column_mapping[col] = "Total Return on Advertising Spend (ROAS)"
-            elif "tacos" in col_lower:
-                column_mapping[col] = "TACOS"
-            elif "7 day total sales" in col_lower or "total sales" in col_lower:
-                column_mapping[col] = "7 Day Total Sales"
-            elif "7 day total orders" in col_lower:
-                column_mapping[col] = "7 Day Total Orders"
-            elif "7 day conversion" in col_lower:
-                column_mapping[col] = "7 Day Conversion Rate"
+st.header("📊 Overview Metrics")
 
-        if column_mapping:
-            self.df.rename(columns=column_mapping, inplace=True)
+c1, c2, c3, c4 = st.columns(4)
 
-    def _clean_data(self):
-        """Clean and prepare data"""
-        for col in self.df.columns:
-            if "Rate" in col or "CTR" in col:
-                if self.df[col].dtype == "object":
-                    try:
-                        self.df[col] = self.df[col].str.rstrip("%").astype("float") / 100.0
-                    except Exception:
-                        pass
+with c1:
+    st.metric("Total Spend", f"₹{total_spend:,.0f}")
+    st.metric("Avg CPC", f"₹{avg_cpc:.2f}")
 
-        sales_col = self._find_column(["7 Day Total Sales", "Total Sales"])
-        acos_col = self._find_column(["Total Advertising Cost of Sales (ACOS)", "ACOS"])
-        roas_col = self._find_column(["Total Return on Advertising Spend (ROAS)", "ROAS"])
+with c2:
+    st.metric("Total Sales", f"₹{total_sales:,.0f}")
+    st.metric("Total Orders", f"{total_orders:,}")
 
-        if sales_col:
-            self.df[sales_col] = self.df[sales_col].fillna(0)
-        if acos_col:
-            self.df[acos_col] = self.df[acos_col].fillna(0)
-        if roas_col:
-            self.df[roas_col] = self.df[roas_col].fillna(0)
+with c3:
+    st.metric("Overall ROAS", f"{overall_roas:.2f}x")
+    st.metric("Avg CTR", f"{avg_ctr:.2f}%")
 
-    def _find_column(self, possible_names):
-        for name in possible_names:
-            if name in self.df.columns:
-                return name
-        return None
+with c4:
+    st.metric("Overall ACOS", f"{overall_acos:.1f}%")
+    st.metric("Conversion Rate", f"{conversion_rate:.2f}%")
 
-    def get_overview_metrics(self):
-        total_spend = self.df["Spend"].sum()
+st.markdown("---")
 
-        sales_col = self._find_column(["7 Day Total Sales", "Total Sales"])
-        total_sales = self.df[sales_col].sum() if sales_col else 0
+# ---------------- KEYWORD CLASSIFICATION ---------------- #
 
-        total_clicks = self.df["Clicks"].sum()
-        total_impressions = self.df["Impressions"].sum()
+HIGH_ROAS = 3
+LOW_ROAS = 1.5
 
-        orders_col = self._find_column(["7 Day Total Orders", "7 Day Total Orders (#)"])
-        total_orders = self.df[orders_col].sum() if orders_col else 0
+df["ROAS"] = df.apply(
+    lambda x: x["Sales"] / x["Spend"] if x["Spend"] > 0 else 0,
+    axis=1
+)
 
-        avg_cpc = self.df["Cost Per Click (CPC)"].mean()
-        avg_ctr = self.df["Click-Through Rate (CTR)"].mean() * 100
+high_potential = df[(df["ROAS"] >= HIGH_ROAS) & (df["Spend"] > 10)]
+low_potential = df[(df["ROAS"] < LOW_ROAS) & (df["Spend"] > 10)]
+wastage = df[(df["Sales"] == 0) & (df["Spend"] > 20)]
 
-        overall_roas = total_sales / total_spend if total_spend > 0 else 0
-        overall_acos = (total_spend / total_sales * 100) if total_sales > 0 else 0
-        conversion_rate = (total_orders / total_clicks * 100) if total_clicks > 0 else 0
+tab1, tab2, tab3 = st.tabs([
+    f"🌟 High Potential ({len(high_potential)})",
+    f"⚠️ Low Potential ({len(low_potential)})",
+    f"❌ Wastage ({len(wastage)})"
+])
 
-        return {
-            "total_spend": total_spend,
-            "total_sales": total_sales,
-            "total_clicks": total_clicks,
-            "total_impressions": total_impressions,
-            "total_orders": total_orders,
-            "avg_cpc": avg_cpc,
-            "avg_ctr": avg_ctr,
-            "overall_roas": overall_roas,
-            "overall_acos": overall_acos,
-            "conversion_rate": conversion_rate,
-        }
+with tab1:
+    st.dataframe(high_potential, use_container_width=True)
 
-    def identify_keyword_types(self):
-        sales_col = self._find_column(["7 Day Total Sales", "Total Sales"])
-        roas_col = self._find_column(["Total Return on Advertising Spend (ROAS)", "ROAS"])
+with tab2:
+    st.dataframe(low_potential, use_container_width=True)
 
-        HIGH_ROAS_THRESHOLD = 3.0
-        LOW_ROAS_THRESHOLD = 1.5
-        MIN_SPEND_FOR_EVALUATION = 10
-        WASTAGE_SPEND_THRESHOLD = 20
+with tab3:
+    st.dataframe(wastage, use_container_width=True)
 
-        high_potential, low_potential, wastage, future_potential = [], [], [], []
+st.markdown("---")
 
-        for _, row in self.df.iterrows():
-            keyword = row["Customer Search Term"]
-            spend = row["Spend"]
-            sales = row[sales_col] if sales_col else 0
-            roas = row[roas_col] if roas_col else 0
-            clicks = row["Clicks"]
-            ctr = row["Click-Through Rate (CTR)"]
+# ---------------- EXPORT NEGATIVE KEYWORDS ---------------- #
 
-            keyword_data = {
-                "Keyword": keyword,
-                "Spend": spend,
-                "Sales": sales,
-                "ROAS": roas,
-                "Clicks": clicks,
-                "CTR (%)": ctr * 100,
-                "Campaign": row["Campaign Name"],
-                "Match Type": row["Match Type"],
-                "Reason": "",
-            }
+if len(wastage) > 0:
+    output = io.BytesIO()
 
-            if spend >= WASTAGE_SPEND_THRESHOLD and sales == 0:
-                keyword_data["Reason"] = f"₹{spend:.0f} spent with zero sales"
-                wastage.append(keyword_data)
-            elif roas >= HIGH_ROAS_THRESHOLD and spend >= MIN_SPEND_FOR_EVALUATION:
-                keyword_data["Reason"] = f"Strong ROAS ({roas:.2f}x) with proven sales"
-                high_potential.append(keyword_data)
-            elif spend >= MIN_SPEND_FOR_EVALUATION and (roas < LOW_ROAS_THRESHOLD or sales == 0):
-                keyword_data["Reason"] = f"Low ROAS ({roas:.2f}x) despite ₹{spend:.0f} spend"
-                low_potential.append(keyword_data)
-            elif spend < MIN_SPEND_FOR_EVALUATION and ctr > 0.02 and clicks > 5:
-                keyword_data["Reason"] = f"High CTR ({ctr*100:.2f}%) with limited data"
-                future_potential.append(keyword_data)
+    neg_df = wastage[["Campaign", "Customer Search Term"]].copy()
+    neg_df["Match Type"] = "Negative Exact"
 
-        return {
-            "high_potential": sorted(high_potential, key=lambda x: x["ROAS"], reverse=True),
-            "low_potential": sorted(low_potential, key=lambda x: x["Spend"], reverse=True),
-            "wastage": sorted(wastage, key=lambda x: x["Spend"], reverse=True),
-            "future_potential": sorted(future_potential, key=lambda x: x["CTR (%)"], reverse=True),
-        }
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        neg_df.to_excel(writer, index=False, sheet_name="Negative Keywords")
 
-    def get_bid_suggestions(self):
-        suggestions = []
+    output.seek(0)
 
-        sales_col = self._find_column(["7 Day Total Sales", "Total Sales"])
-        roas_col = self._find_column(["Total Return on Advertising Spend (ROAS)", "ROAS"])
-
-        for _, row in self.df.iterrows():
-            current_cpc = row["Cost Per Click (CPC)"]
-            roas = row[roas_col] if roas_col else 0
-            spend = row["Spend"]
-            sales = row[sales_col] if sales_col else 0
-
-            if spend < 5:
-                continue
-
-            suggestion = {
-                "Keyword": row["Customer Search Term"],
-                "Campaign": row["Campaign Name"],
-                "Ad Group": row["Ad Group Name"],
-                "Current CPC": current_cpc,
-                "Spend": spend,
-                "ROAS": roas,
-                "Action": "",
-                "Suggested Bid": 0,
-                "Change (%)": 0,
-                "Reason": "",
-            }
-
-            if roas >= 3.5:
-                suggestion.update(
-                    {
-                        "Action": "INCREASE",
-                        "Suggested Bid": current_cpc * 1.3,
-                        "Change (%)": 30,
-                        "Reason": f"High ROAS ({roas:.2f}x) - scale winning keyword",
-                    }
-                )
-            elif roas >= 2.5:
-                suggestion.update(
-                    {
-                        "Action": "INCREASE",
-                        "Suggested Bid": current_cpc * 1.15,
-                        "Change (%)": 15,
-                        "Reason": f"Good ROAS ({roas:.2f}x) - moderate increase",
-                    }
-                )
-            elif sales == 0 and spend > 20:
-                suggestion.update(
-                    {
-                        "Action": "PAUSE",
-                        "Suggested Bid": 0,
-                        "Change (%)": -100,
-                        "Reason": f"₹{spend:.0f} spent with no sales - pause keyword",
-                    }
-                )
-            elif roas < 1.0 and spend > 10:
-                suggestion.update(
-                    {
-                        "Action": "DECREASE",
-                        "Suggested Bid": current_cpc * 0.7,
-                        "Change (%)": -30,
-                        "Reason": f"Poor ROAS ({roas:.2f}x) - reduce spend",
-                    }
-                )
-            else:
-                continue
-
-            suggestions.append(suggestion)
-
-        return sorted(suggestions, key=lambda x: x["Spend"], reverse=True)
-
-
-def main():
-    st.title("🚀 Amazon Ads Automation Tool")
-    st.caption("AI-Powered PPC Optimization Platform")
-    st.markdown("---")
-
-    with st.sidebar:
-        st.header("📁 Upload Report")
-        st.markdown("Upload your Amazon Sponsored Products Search Term Report")
-
-        uploaded_file = st.file_uploader(
-            "Choose an Excel file",
-            type=["xlsx", "xls"],
-            help="Download from Amazon Ads Console → Reports → Search Term Report",
-        )
-
-    if uploaded_file is None:
-        st.info("👈 Upload your Amazon search term report to get started")
-        st.stop()
-
-    try:
-        df = pd.read_excel(uploaded_file)
-
-        required_cols = ["Customer Search Term", "Spend", "Clicks"]
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
-            st.stop()
-
-        analyzer = AmazonAdsAnalyzer(df)
-        st.success(f"✅ Successfully analyzed {len(df)} keywords from your report!")
-
-        st.header("📊 Overview Metrics")
-        metrics = analyzer.get_overview_metrics()
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Total Spend", f"₹{metrics['total_spend']:,.0f}")
-            st.metric("Avg CPC", f"₹{metrics['avg_cpc']:.2f}")
-        with c2:
-            st.metric("Total Sales", f"₹{metrics['total_sales']:,.0f}")
-            st.metric("Total Orders", f"{metrics['total_orders']:,}")
-        with c3:
-            st.metric("Overall ROAS", f"{metrics['overall_roas']:.2f}x")
-            st.metric("Avg CTR", f"{metrics['avg_ctr']:.2f}%")
-        with c4:
-            st.metric("Overall ACOS", f"{metrics['overall_acos']:.1f}%")
-            st.metric("Conversion Rate", f"{metrics['conversion_rate']:.2f}%")
-
-        st.markdown("---")
-        st.header("🎯 Keyword Classification")
-        classification = analyzer.identify_keyword_types()
-
-        tab1, tab2, tab3, tab4 = st.tabs(
-            [
-                f"🌟 High Potential ({len(classification['high_potential'])})",
-                f"🔮 Future Potential ({len(classification['future_potential'])})",
-                f"⚠️ Low Potential ({len(classification['low_potential'])})",
-                f"❌ Wastage ({len(classification['wastage'])})",
-            ]
-        )
-
-        with tab1:
-            if classification["high_potential"]:
-                st.markdown(
-                    '<div class="success-box">These keywords are performing well! Consider increasing bids.</div>',
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(pd.DataFrame(classification["high_potential"]), use_container_width=True, hide_index=True)
-            else:
-                st.info("No high potential keywords found")
-
-        with tab2:
-            if classification["future_potential"]:
-                st.markdown(
-                    '<div class="success-box">These keywords show promise but need more data.</div>',
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(pd.DataFrame(classification["future_potential"]), use_container_width=True, hide_index=True)
-            else:
-                st.info("No future potential keywords found")
-
-        with tab3:
-            if classification["low_potential"]:
-                st.markdown(
-                    '<div class="warning-box">These keywords are underperforming. Consider reducing bids or pausing.</div>',
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(pd.DataFrame(classification["low_potential"]), use_container_width=True, hide_index=True)
-            else:
-                st.info("No low potential keywords found")
-
-        with tab4:
-            if classification["wastage"]:
-                st.markdown(
-                    '<div class="danger-box">These keywords are wasting budget with zero sales!</div>',
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(pd.DataFrame(classification["wastage"]), use_container_width=True, hide_index=True)
-            else:
-                st.success("No wastage keywords - great job!")
-
-        st.markdown("---")
-        st.header("💡 Bid Optimization Suggestions")
-        bid_suggestions = analyzer.get_bid_suggestions()
-
-        if bid_suggestions:
-            st.info(f"Found {len(bid_suggestions)} bid adjustment recommendations")
-            st.dataframe(pd.DataFrame(bid_suggestions), use_container_width=True, hide_index=True)
-        else:
-            st.success("No bid adjustments needed at this time!")
-
-        st.markdown("---")
-        st.header("📥 Export Bulk Upload Sheets")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Negative Keywords")
-            negative_keywords = classification["wastage"] + classification["low_potential"]
-            if negative_keywords:
-                df_negatives = pd.DataFrame(
-                    [
-                        {
-                            "Campaign": kw["Campaign"],
-                            "Ad Group": "",
-                            "Keyword": kw["Keyword"],
-                            "Match Type": "Negative Exact",
-                            "Status": "Enabled",
-                        }
-                        for kw in negative_keywords
-                    ]
-                )
-
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    df_negatives.to_excel(writer, index=False, sheet_name="Negative Keywords")
-                output.seek(0)
-
-                st.download_button(
-                    "📥 Download Negative Keywords Sheet",
-                    data=output,
-                    file_name=f"negative_keywords_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-            else:
-                st.info("No negative keywords to export")
-
-        with col2:
-            st.subheader("Bid Adjustments")
-            if bid_suggestions:
-                bulk_bids = [
-                    {
-                        "Campaign": s["Campaign"],
-                        "Ad Group": s["Ad Group"],
-                        "Keyword": s["Keyword"],
-                        "Current Bid": s["Current CPC"],
-                        "Suggested Bid": s["Suggested Bid"],
-                        "Change %": s["Change (%)"],
-                        "Reason": s["Reason"],
-                    }
-                    for s in bid_suggestions
-                    if s["Action"] != "PAUSE"
-                ]
-                if bulk_bids:
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                        pd.DataFrame(bulk_bids).to_excel(writer, index=False, sheet_name="Bid Adjustments")
-                    output.seek(0)
-                    st.download_button(
-                        "📥 Download Bid Adjustments Sheet",
-                        data=output,
-                        file_name=f"bid_adjustments_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                    )
-                else:
-                    st.info("No bid adjustments to export")
-            else:
-                st.info("No bid adjustments to export")
-
-    except Exception as e:
-        st.error(f"❌ Error analyzing file: {e}")
-
-
-if __name__ == "__main__":
-    main()
+    st.download_button(
+        "📥 Download Negative Keywords",
+        data=output,
+        file_name=f"negative_keywords_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
