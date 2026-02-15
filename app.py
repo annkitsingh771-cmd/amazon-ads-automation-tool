@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v6.1 (Color Edition)
-
+Amazon Ads Agency Dashboard Pro v6.1
 - CPC calculation from Spend/Clicks
 - ASIN negative handling
 - TCoAS (Total Cost of Advertising Sales) support
