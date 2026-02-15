@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v6.1
+Amazon Ads Agency Dashboard Pro v6.1 (Color Edition)
 
 - CPC calculation from Spend/Clicks
 - ASIN negative handling
 - TCoAS (Total Cost of Advertising Sales) support
 - Amazon BULK upload–ready bid optimization export
+- Improved target inputs (no clipping)
+- Attractive color theme with strong red for negatives
 """
 
 import io
@@ -29,8 +31,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
 # -----------------------------------------------------------------------------
-# Styling (NO big welcome banner)
+# Styling
 # -----------------------------------------------------------------------------
 def load_custom_css():
     css = """
@@ -38,12 +41,15 @@ def load_custom_css():
     .main {
         padding-top: 0.5rem;
     }
+
+    /* Header */
     .agency-header {
-        background: #020617;
+        background: radial-gradient(circle at top left, #6366f1 0, #020617 45%);
         padding: 1.4rem 1.8rem;
         border-radius: 14px;
         margin-bottom: 1.2rem;
         color: #e5e7eb;
+        box-shadow: 0 16px 40px rgba(15,23,42,0.7);
     }
     .agency-header h1 {
         margin: 0;
@@ -52,27 +58,50 @@ def load_custom_css():
     .agency-header p {
         margin: 0.2rem 0 0 0;
         font-size: 0.9rem;
-        color: #9ca3af;
+        color: #cbd5f5;
     }
+
+    /* Metric cards */
     div[data-testid="stMetric"] {
-        background: #020617;
-        border-radius: 10px;
+        background: linear-gradient(145deg,#020617,#020617,#111827);
+        border-radius: 12px;
         padding: 1rem 0.8rem;
-        border: 1px solid #1e293b;
+        border: 1px solid #1f2937;
+        box-shadow: 0 8px 24px rgba(15,23,42,0.8);
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 0.85rem !important;
+        font-size: 0.8rem !important;
         color: #9ca3af !important;
         white-space: normal !important;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.4rem !important;
-        color: #e5e7eb !important;
+        font-size: 1.45rem !important;
+        color: #f9fafb !important;
         white-space: normal !important;
         word-break: break-word !important;
     }
+
+    /* Target number inputs (sidebar) */
+    div[data-testid="stNumberInput"] > label {
+        font-size: 0.75rem;
+        line-height: 1.1;
+        color: #e5e7eb;
+    }
+    div[data-testid="stNumberInput"] > div {
+        background: #020617;
+        border-radius: 10px;
+        border: 1px solid #1f2937;
+    }
+    div[data-testid="stNumberInput"] input {
+        text-align: center;
+        padding: 0.3rem 0.4rem;
+        font-size: 0.85rem;
+        color: #f9fafb;
+    }
+
+    /* Info / status boxes */
     .info-box {
-        background: rgba(59,130,246,0.12);
+        background: radial-gradient(circle at top left, rgba(59,130,246,0.35), rgba(15,23,42,0.9));
         border-left: 4px solid #3b82f6;
         padding: 0.9rem 1rem;
         border-radius: 10px;
@@ -80,48 +109,61 @@ def load_custom_css():
         font-size: 0.9rem;
     }
     .success-box {
-        background: rgba(22,163,74,0.12);
+        background: radial-gradient(circle at top left, rgba(34,197,94,0.3), rgba(6,78,59,0.9));
         border-left: 4px solid #22c55e;
         padding: 0.9rem 1rem;
         border-radius: 10px;
         margin-bottom: 0.8rem;
         font-size: 0.9rem;
+        color: #dcfce7;
     }
     .warning-box {
-        background: rgba(234,179,8,0.12);
-        border-left: 4px solid #facc15;
+        background: radial-gradient(circle at top left, rgba(250,204,21,0.32), rgba(77,54,10,0.95));
+        border-left: 4px solid #eab308;
         padding: 0.9rem 1rem;
         border-radius: 10px;
         margin-bottom: 0.8rem;
         font-size: 0.9rem;
+        color: #fef9c3;
     }
     .danger-box {
-        background: rgba(220,38,38,0.12);
-        border-left: 4px solid #ef4444;
+        background: radial-gradient(circle at top left, rgba(248,113,113,0.38), rgba(127,29,29,0.96));
+        border-left: 4px solid #ef4444;   /* strong red */
         padding: 0.9rem 1rem;
         border-radius: 10px;
         margin-bottom: 0.8rem;
         font-size: 0.9rem;
+        color: #fee2e2;
     }
+
     .purple-box {
-        background: rgba(129,140,248,0.12);
+        background: radial-gradient(circle at top left, rgba(129,140,248,0.35), rgba(30,64,175,0.96));
         border-left: 4px solid #8b5cf6;
         padding: 0.9rem 1rem;
         border-radius: 10px;
         margin-bottom: 0.8rem;
         font-size: 0.9rem;
+        color: #e0e7ff;
     }
     .cyan-box {
-        background: rgba(6,182,212,0.12);
+        background: radial-gradient(circle at top left, rgba(6,182,212,0.35), rgba(8,47,73,0.96));
         border-left: 4px solid #06b6d4;
         padding: 0.9rem 1rem;
         border-radius: 10px;
         margin-bottom: 0.8rem;
         font-size: 0.9rem;
+        color: #cffafe;
+    }
+
+    /* Optional: slightly rounded tables */
+    .blank > div[data-testid="stDataFrame"] table {
+        border-radius: 10px;
+        overflow: hidden;
     }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -200,7 +242,6 @@ def format_number(value) -> str:
 
 
 def is_asin(value) -> bool:
-    """Check if value is an Amazon ASIN (B0xxxxxx...)."""
     if not value or pd.isna(value):
         return False
     val_str = str(value).strip().upper()
@@ -208,9 +249,7 @@ def is_asin(value) -> bool:
 
 
 def get_negative_type(value) -> str:
-    if is_asin(value):
-        return "PRODUCT"
-    return "KEYWORD"
+    return "PRODUCT" if is_asin(value) else "KEYWORD"
 
 
 # -----------------------------------------------------------------------------
@@ -231,10 +270,6 @@ class ClientData:
 
 
 class CompleteAnalyzer:
-    """
-    Core engine – based on your v6 logic with CPC calc, TCoAS, negatives, etc.[file:72]
-    """
-
     REQUIRED_COLUMNS = ["Customer Search Term", "Campaign Name", "Spend", "Clicks"]
 
     def __init__(
@@ -272,23 +307,19 @@ class CompleteAnalyzer:
         df.columns = df.columns.str.strip()
 
         mapping = {
-            # search term
             "customer search term": "Customer Search Term",
             "search term": "Customer Search Term",
             "keyword": "Customer Search Term",
             "searchterm": "Customer Search Term",
             "customer_search_term": "Customer Search Term",
             "search terms": "Customer Search Term",
-            # campaign
             "campaign": "Campaign Name",
             "campaign name": "Campaign Name",
             "campaign_name": "Campaign Name",
-            # ad group
             "ad group": "Ad Group Name",
             "ad group name": "Ad Group Name",
             "adgroup": "Ad Group Name",
             "ad_group_name": "Ad Group Name",
-            # match type
             "match type": "Match Type",
             "matchtype": "Match Type",
             "match_type": "Match Type",
@@ -320,12 +351,12 @@ class CompleteAnalyzer:
             "impressions": "Impressions",
             "imps": "Impressions",
             "clicks": "Clicks",
-            # CPC
+            # cpc
             "cpc": "CPC",
             "cost per click": "CPC",
             "avg cpc": "CPC",
             "average cpc": "CPC",
-        }  # [file:72]
+        }
 
         df.columns = df.columns.str.lower().str.strip()
         for old, new in mapping.items():
@@ -371,7 +402,7 @@ class CompleteAnalyzer:
                     )
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # CPC calculation from spend/clicks if missing.[file:72]
+        # CPC from Spend/Clicks when missing
         df["CPC_Calculated"] = df.apply(
             lambda x: safe_float(x.get("Spend", 0))
             / safe_float(x.get("Clicks", 1))
@@ -386,12 +417,12 @@ class CompleteAnalyzer:
             axis=1,
         )
 
-        # keep rows with any activity
+        # keep active rows
         df = df[(df["Spend"] > 0) | (df["Clicks"] > 0)].copy()
         if len(df) == 0:
             raise ValueError("No valid data after filtering")
 
-        # derived metrics (includes TCoAS & Negative_Type).[file:72]
+        # derived metrics
         df["Profit"] = df["Sales"] - df["Spend"]
         df["Wastage"] = df.apply(
             lambda x: safe_float(x.get("Spend", 0))
@@ -585,7 +616,7 @@ class CompleteAnalyzer:
             return 0
 
     # ------------------------------------------------------------------ #
-    # Insights & classifications (same logic as v6, shortened)
+    # Insights (short)
     # ------------------------------------------------------------------ #
     def get_performance_insights(self) -> Dict:
         s = self.get_client_summary()
@@ -608,14 +639,14 @@ class CompleteAnalyzer:
                         "metric": "CTR",
                         "value": f"{avg_ctr:.2f}%",
                         "issue": "Extremely low CTR",
-                        "action": "Revamp creatives and keywords",
+                        "action": "Revamp creatives and targeting",
                     }
                 )
                 insights["content_suggestions"].extend(
                     [
                         'Add power words: "Best", "Top-Rated", "Premium"',
                         'Show pricing: "Under ₹999", "Free Shipping"',
-                        "Use high-res lifestyle images",
+                        "Use high‑res lifestyle images",
                     ]
                 )
             elif avg_ctr < 0.8:
@@ -635,7 +666,7 @@ class CompleteAnalyzer:
                         "metric": "CTR",
                         "value": f"{avg_ctr:.2f}%",
                         "issue": "Strong CTR",
-                        "action": "Scale traffic and document learnings",
+                        "action": "Scale winning campaigns",
                     }
                 )
 
@@ -647,7 +678,7 @@ class CompleteAnalyzer:
                         "metric": "CVR",
                         "value": f"{avg_cvr:.2f}%",
                         "issue": "Very low conversion",
-                        "action": "Fix pricing, listing quality, reviews",
+                        "action": "Fix pricing, listing, or audience",
                     }
                 )
             elif avg_cvr < 3.0:
@@ -669,7 +700,7 @@ class CompleteAnalyzer:
                         "metric": "ROAS",
                         "value": f"{roas:.2f}x",
                         "issue": "Losing money",
-                        "action": "Pause or cut bids on bad campaigns",
+                        "action": "Pause or heavily cut bids",
                     }
                 )
             elif roas < 2.0:
@@ -689,7 +720,7 @@ class CompleteAnalyzer:
                         "metric": "ROAS",
                         "value": f"{roas:.2f}x",
                         "issue": "Good profitability",
-                        "action": "Scale winning areas",
+                        "action": "Scale winners",
                     }
                 )
 
@@ -711,7 +742,7 @@ class CompleteAnalyzer:
                         "level": "warning",
                         "metric": "ACOS",
                         "value": f"{acos:.1f}%",
-                        "issue": "ACOS above target",
+                        "issue": "ACOS slightly above target",
                         "action": "Gradually reduce bids on poor performers",
                     }
                 )
@@ -736,7 +767,7 @@ class CompleteAnalyzer:
                         "metric": "TCoAS",
                         "value": f"{tcoas:.1f}%",
                         "issue": f"TCoAS above target {self.target_tcoas:.1f}%",
-                        "action": "Increase organic share or cut ad spend",
+                        "action": "Increase organic sales or trim ad spend",
                     }
                 )
 
@@ -746,7 +777,7 @@ class CompleteAnalyzer:
             return insights
 
     # ------------------------------------------------------------------ #
-    # Keyword classification, ROAS plan, bids (v6-style)
+    # Classification & bids
     # ------------------------------------------------------------------ #
     def classify_keywords_improved(self) -> Dict[str, List[Dict]]:
         cats = {
@@ -927,16 +958,10 @@ class CompleteAnalyzer:
             return []
 
     # ------------------------------------------------------------------ #
-    # Amazon BULK builder for bids
+    # Amazon BULK file builder for bids
     # ------------------------------------------------------------------ #
     def build_amazon_bulk_from_bids(self, bid_suggestions: List[Dict]) -> pd.DataFrame:
-        """
-        Convert internal bid suggestions into Amazon Sponsored Products bulk
-        upload format. You can upload this file directly in Amazon Ads
-        > Bulk operations > Upload.
-        """
         rows: List[Dict] = []
-
         for s in bid_suggestions:
             try:
                 campaign = safe_str(s.get("Campaign"))
@@ -962,7 +987,7 @@ class CompleteAnalyzer:
 
                 if action == "PAUSE":
                     row["State"] = "paused"
-                    row["Bid"] = ""  # Amazon will just pause
+                    row["Bid"] = ""
 
                 rows.append(row)
             except Exception:
@@ -971,7 +996,7 @@ class CompleteAnalyzer:
         return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------ #
-    # Simple report (shortened from v6)
+    # Simple text report
     # ------------------------------------------------------------------ #
     def generate_client_report(self) -> str:
         try:
@@ -1014,12 +1039,12 @@ TCoAS : {s['tcoas']:.1f}%
 
 METRICS
 -------
-Orders: {format_number(s['total_orders'])}
-Clicks: {format_number(s['total_clicks'])}
-Impr. : {format_number(s['total_impressions'])}
-CVR   : {s['avg_cvr']:.2f}%
-CTR   : {s['avg_ctr']:.2f}%
-CPA   : {format_currency(s['avg_cpa'])}
+Orders : {format_number(s['total_orders'])}
+Clicks : {format_number(s['total_clicks'])}
+Impr.  : {format_number(s['total_impressions'])}
+CVR    : {s['avg_cvr']:.2f}%
+CTR    : {s['avg_ctr']:.2f}%
+CPA    : {format_currency(s['avg_cpa'])}
 Avg CPC: {format_currency(s['avg_cpc'])}
 
 KEYWORDS
@@ -1039,7 +1064,7 @@ Generated by Amazon Ads Dashboard Pro v6.1
 
 
 # -----------------------------------------------------------------------------
-# Session & layout
+# Session & layout helpers
 # -----------------------------------------------------------------------------
 def init_session_state():
     if "clients" not in st.session_state:
@@ -1103,14 +1128,39 @@ def render_sidebar():
 
             st.info("🎯 Targets (optional; 0 = use smart defaults)")
             c1, c2, c3, c4 = st.columns(4)
+
             with c1:
-                t_acos = st.number_input("Target ACOS %", value=0.0, step=5.0)
+                t_acos = st.number_input(
+                    "Target\nACOS %",
+                    value=0.0,
+                    step=5.0,
+                    format="%.1f",
+                    key="t_acos",
+                )
             with c2:
-                t_roas = st.number_input("Target ROAS", value=0.0, step=0.5)
+                t_roas = st.number_input(
+                    "Target\nROAS",
+                    value=0.0,
+                    step=0.5,
+                    format="%.1f",
+                    key="t_roas",
+                )
             with c3:
-                t_cpa = st.number_input("Target CPA ₹", value=0.0, step=50.0)
+                t_cpa = st.number_input(
+                    "Target\nCPA ₹",
+                    value=0.0,
+                    step=50.0,
+                    format="%.0f",
+                    key="t_cpa",
+                )
             with c4:
-                t_tcoas = st.number_input("Target TCoAS %", value=0.0, step=5.0)
+                t_tcoas = st.number_input(
+                    "Target\nTCoAS %",
+                    value=0.0,
+                    step=5.0,
+                    format="%.1f",
+                    key="t_tcoas",
+                )
 
             em = st.text_input("Client email (optional)")
             up = st.file_uploader(
@@ -1393,7 +1443,7 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
 
     c1, c2, c3 = st.columns(3)
 
-    # Negatives (from wastage)
+    # Negatives
     with c1:
         st.markdown("#### 🚫 Negative keywords")
         wast = cats["wastage"]
@@ -1427,7 +1477,7 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         else:
             st.info("No pure wastage keywords → no negatives needed.")
 
-    # Amazon BULK bid changes
+    # Amazon bulk bid changes
     with c2:
         st.markdown("#### 💰 Bid adjustments (Amazon bulk)")
         if sug:
