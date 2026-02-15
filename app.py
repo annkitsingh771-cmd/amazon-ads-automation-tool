@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v5.0 - FULLY FIXED
-✅ FIXED: Number wrapping | ✅ FIXED: Sales column detection | ✅ FIXED: Wastage calculation
+Amazon Ads Agency Dashboard Pro v6.0 
+
 """
 
-import io, traceback, copy
+import io, traceback, copy, re
 from datetime import datetime
 from typing import Dict, List
 import pandas as pd
@@ -22,9 +22,7 @@ st.set_page_config(
 def load_custom_css():
     css = """
     <style>
-    .main {
-        padding-top: 0.5rem;
-    }
+    .main { padding-top: 0.5rem; }
     .agency-header {
         background: linear-gradient(135deg, #1e40af, #3b82f6);
         padding: 2rem;
@@ -33,7 +31,6 @@ def load_custom_css():
         text-align: center;
         color: white;
     }
-    /* FIXED: Prevent text wrapping in metrics */
     .metric-card {
         background: rgba(30, 41, 59, 0.95);
         border: 1px solid rgba(148, 163, 184, 0.3);
@@ -62,48 +59,12 @@ def load_custom_css():
         text-overflow: ellipsis;
         line-height: 1.2;
     }
-    .success-box {
-        background: rgba(22, 163, 74, 0.2);
-        border-left: 4px solid #22c55e;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .warning-box {
-        background: rgba(234, 179, 8, 0.2);
-        border-left: 4px solid #facc15;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .danger-box {
-        background: rgba(220, 38, 38, 0.2);
-        border-left: 4px solid #ef4444;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .info-box {
-        background: rgba(59, 130, 246, 0.2);
-        border-left: 4px solid #3b82f6;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .purple-box {
-        background: rgba(168, 85, 247, 0.2);
-        border-left: 4px solid #a855f7;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .cyan-box {
-        background: rgba(6, 182, 212, 0.2);
-        border-left: 4px solid #06b6d4;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
+    .success-box { background: rgba(22, 163, 74, 0.2); border-left: 4px solid #22c55e; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .warning-box { background: rgba(234, 179, 8, 0.2); border-left: 4px solid #facc15; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .danger-box { background: rgba(220, 38, 38, 0.2); border-left: 4px solid #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .info-box { background: rgba(59, 130, 246, 0.2); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .purple-box { background: rgba(168, 85, 247, 0.2); border-left: 4px solid #a855f7; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .cyan-box { background: rgba(6, 182, 212, 0.2); border-left: 4px solid #06b6d4; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -140,14 +101,14 @@ def safe_str(value, default='N/A'):
 def format_currency(value):
     try:
         val = safe_float(value, 0)
-        if val >= 10000000:  # 1 Crore+
+        if val >= 10000000:
             return f"₹{val/10000000:.2f}Cr"
-        elif val >= 100000:  # 1 Lakh+
+        elif val >= 100000:
             return f"₹{val/100000:.2f}L"
         else:
-            return f"₹{val:,.0f}"
+            return f"₹{val:,.2f}"
     except:
-        return "₹0"
+        return "₹0.00"
 
 def format_number(value):
     try:
@@ -162,6 +123,20 @@ def format_number(value):
             return str(val)
     except:
         return "0"
+
+def is_asin(value):
+    """Check if value is an Amazon ASIN (starts with B0, etc.)"""
+    if not value or pd.isna(value):
+        return False
+    val_str = str(value).strip().upper()
+    # ASIN pattern: B followed by alphanumeric, typically 10 chars
+    return bool(re.match(r'^[B][0-9A-Z]{9,}$', val_str))
+
+def get_negative_type(value):
+    """Determine if negative is keyword or product ASIN"""
+    if is_asin(value):
+        return 'PRODUCT'
+    return 'KEYWORD'
 
 class ClientData:
     def __init__(self, name, industry="E-commerce", budget=50000):
@@ -188,7 +163,7 @@ class CompleteAnalyzer:
         self.df = None
         self.raw_df = None
         self.error = None
-        self.column_mapping = {}  # Store mapping for debugging
+        self.column_mapping = {}
         
         try:
             self.raw_df = df.copy(deep=True)
@@ -202,14 +177,12 @@ class CompleteAnalyzer:
             raise ValueError("Empty DataFrame")
 
         original_columns = list(df.columns)
-        st.info(f"📋 Original columns: {original_columns}")
         
         # Clean column names
         df.columns = df.columns.str.strip()
 
-        # EXTENDED column mapping for Amazon reports
+        # EXTENDED column mapping
         mapping = {
-            # Search term variations
             'customer search term': 'Customer Search Term',
             'search term': 'Customer Search Term',
             'keyword': 'Customer Search Term',
@@ -217,23 +190,20 @@ class CompleteAnalyzer:
             'customer_search_term': 'Customer Search Term',
             'search terms': 'Customer Search Term',
             
-            # Campaign variations
             'campaign': 'Campaign Name',
             'campaign name': 'Campaign Name',
             'campaign_name': 'Campaign Name',
             
-            # Ad group variations
             'ad group': 'Ad Group Name',
             'ad group name': 'Ad Group Name',
             'adgroup': 'Ad Group Name',
             'ad_group_name': 'Ad Group Name',
             
-            # Match type variations
             'match type': 'Match Type',
             'matchtype': 'Match Type',
             'match_type': 'Match Type',
             
-            # SALES - EXTENDED MAPPING (most common issue)
+            # SALES
             '7 day total sales': 'Sales',
             '7 day total sales (₹)': 'Sales',
             '7 day total sales ($)': 'Sales',
@@ -242,12 +212,12 @@ class CompleteAnalyzer:
             'total sales': 'Sales',
             'sales': 'Sales',
             'revenue': 'Sales',
-            '7 day total sales ': 'Sales',  # with trailing space
+            '7 day total sales ': 'Sales',
             '7 Day Total Sales': 'Sales',
             'sales (₹)': 'Sales',
             'sales ($)': 'Sales',
             
-            # ORDERS - EXTENDED MAPPING
+            # ORDERS
             '7 day total orders': 'Orders',
             '7 day total orders (#)': 'Orders',
             '7 day orders': 'Orders',
@@ -258,7 +228,7 @@ class CompleteAnalyzer:
             '7 day ordered units': 'Orders',
             '7 Day Total Orders': 'Orders',
             
-            # Spend/Cost variations
+            # Spend/Cost
             'cost': 'Spend',
             'spend': 'Spend',
             'ad spend': 'Spend',
@@ -272,29 +242,22 @@ class CompleteAnalyzer:
             # Clicks
             'clicks': 'Clicks',
             
-            # CPC variations
+            # CPC
             'cpc': 'CPC',
             'cost per click': 'CPC',
             'avg cpc': 'CPC',
             'average cpc': 'CPC',
         }
 
-        # Convert to lowercase for matching
         df.columns = df.columns.str.lower().str.strip()
         
-        # Apply mapping and track
         for old, new in mapping.items():
             old_clean = old.lower().strip()
             if old_clean in df.columns:
                 df.rename(columns={old_clean: new}, inplace=True)
                 self.column_mapping[old] = new
 
-        # Title case for remaining columns
         df.columns = [c.title() for c in df.columns]
-
-        st.info(f"📋 Mapped columns: {list(df.columns)}")
-        st.info(f"📋 Sales column present: {'Sales' in df.columns}")
-        st.info(f"📋 Orders column present: {'Orders' in df.columns}")
 
         # Check required columns
         missing = [c for c in self.REQUIRED_COLUMNS if c not in df.columns]
@@ -302,13 +265,12 @@ class CompleteAnalyzer:
             available = list(df.columns)
             raise ValueError(f"Missing required columns: {missing}. Available: {available}")
 
-        # Add optional columns with defaults
+        # Add optional columns
         optional_numeric = ['Sales', 'Orders', 'Impressions', 'Cpc']
         optional_text = ['Ad Group Name', 'Match Type']
         
         for col in optional_numeric:
             if col not in df.columns:
-                st.warning(f"⚠️ Column '{col}' not found, defaulting to 0")
                 df[col] = 0
                 
         for col in optional_text:
@@ -319,44 +281,45 @@ class CompleteAnalyzer:
         if 'Cpc' in df.columns and 'CPC' not in df.columns:
             df['CPC'] = df['Cpc']
 
-        # Convert numeric columns - FIXED: better cleaning
+        # Convert numeric columns
         numeric_cols = ['Spend', 'Sales', 'Clicks', 'Impressions', 'Orders', 'CPC']
         for col in numeric_cols:
             if col in df.columns:
                 if df[col].dtype == 'object':
-                    # More thorough cleaning
                     df[col] = df[col].astype(str).str.replace('₹', '').str.replace('$', '').str.replace(',', '').str.replace('%', '').str.replace('(', '-').str.replace(')', '').str.strip()
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # Show sample data for debugging
-        st.info(f"📊 Sample Sales values: {df['Sales'].head(3).tolist()}")
-        st.info(f"📊 Sample Orders values: {df['Orders'].head(3).tolist()}")
-        st.info(f"📊 Total Sales: ₹{df['Sales'].sum():,.2f}")
-        st.info(f"📊 Total Orders: {df['Orders'].sum()}")
+        # FIXED: Calculate CPC from Spend/Clicks if CPC is 0 or missing
+        df['CPC_Calculated'] = df.apply(
+            lambda x: safe_float(x.get('Spend', 0)) / safe_float(x.get('Clicks', 1)) 
+            if safe_float(x.get('Clicks', 0)) > 0 else 0, 
+            axis=1
+        )
+        
+        # Use calculated CPC if original CPC is 0
+        df['CPC'] = df.apply(
+            lambda x: safe_float(x.get('CPC', 0)) if safe_float(x.get('CPC', 0)) > 0 else safe_float(x.get('CPC_Calculated', 0)),
+            axis=1
+        )
 
-        # Filter out rows with no activity
+        # Filter rows with activity
         df = df[(df['Spend'] > 0) | (df['Clicks'] > 0)].copy()
 
         if len(df) == 0:
-            raise ValueError("No valid data after filtering - all rows have zero spend and clicks")
+            raise ValueError("No valid data after filtering")
 
         # Calculate derived metrics
         df['Profit'] = df['Sales'] - df['Spend']
-        
-        # FIXED: Wastage - only where Sales is exactly 0
         df['Wastage'] = df.apply(lambda x: safe_float(x.get('Spend', 0)) if safe_float(x.get('Sales', 0)) == 0 else 0, axis=1)
-        
-        df['CVR'] = df.apply(lambda x: (safe_float(x.get('Orders', 0)) / safe_float(x.get('Clicks', 1)) * 100) 
-                             if safe_float(x.get('Clicks', 0)) > 0 else 0, axis=1)
-        df['ROAS'] = df.apply(lambda x: (safe_float(x.get('Sales', 0)) / safe_float(x.get('Spend', 1))) 
-                              if safe_float(x.get('Spend', 0)) > 0 else 0, axis=1)
-        df['ACOS'] = df.apply(lambda x: (safe_float(x.get('Spend', 0)) / safe_float(x.get('Sales', 1)) * 100) 
-                              if safe_float(x.get('Sales', 0)) > 0 else 0, axis=1)
-        df['CTR'] = df.apply(lambda x: (safe_float(x.get('Clicks', 0)) / safe_float(x.get('Impressions', 1)) * 100) 
-                             if safe_float(x.get('Impressions', 0)) > 0 else 0, axis=1)
-        df['CPA'] = df.apply(lambda x: (safe_float(x.get('Spend', 0)) / safe_float(x.get('Orders', 1))) 
-                             if safe_float(x.get('Orders', 0)) > 0 else 0, axis=1)
+        df['CVR'] = df.apply(lambda x: (safe_float(x.get('Orders', 0)) / safe_float(x.get('Clicks', 1)) * 100) if safe_float(x.get('Clicks', 0)) > 0 else 0, axis=1)
+        df['ROAS'] = df.apply(lambda x: (safe_float(x.get('Sales', 0)) / safe_float(x.get('Spend', 1))) if safe_float(x.get('Spend', 0)) > 0 else 0, axis=1)
+        df['ACOS'] = df.apply(lambda x: (safe_float(x.get('Spend', 0)) / safe_float(x.get('Sales', 1)) * 100) if safe_float(x.get('Sales', 0)) > 0 else 0, axis=1)
+        df['CTR'] = df.apply(lambda x: (safe_float(x.get('Clicks', 0)) / safe_float(x.get('Impressions', 1)) * 100) if safe_float(x.get('Impressions', 0)) > 0 else 0, axis=1)
+        df['CPA'] = df.apply(lambda x: (safe_float(x.get('Spend', 0)) / safe_float(x.get('Orders', 1))) if safe_float(x.get('Orders', 0)) > 0 else 0, axis=1)
         df['TCoAS'] = df['ACOS']
+        
+        # Add negative type classification
+        df['Negative_Type'] = df['Customer Search Term'].apply(get_negative_type)
         
         df['Client'] = self.client_name
         df['Processed_Date'] = datetime.now()
@@ -376,7 +339,18 @@ class CompleteAnalyzer:
             tw = safe_float(self.df['Wastage'].sum())
             tp = safe_float(self.df['Profit'].sum())
 
-            avg_cpc = safe_float(self.df['CPC'].mean()) if 'CPC' in self.df.columns else (ts / tc if tc > 0 else 0)
+            # FIXED: Calculate avg CPC properly
+            avg_cpc = 0
+            if 'CPC' in self.df.columns:
+                # Filter out 0 CPC values for average calculation
+                cpc_values = self.df[self.df['CPC'] > 0]['CPC']
+                if len(cpc_values) > 0:
+                    avg_cpc = safe_float(cpc_values.mean())
+            
+            # Fallback: calculate from totals
+            if avg_cpc == 0 and tc > 0:
+                avg_cpc = ts / tc
+
             avg_ctr = safe_float(self.df['CTR'].mean())
             avg_cvr = safe_float(self.df['CVR'].mean())
             avg_cpa = (ts / to) if to > 0 else 0
@@ -420,48 +394,30 @@ class CompleteAnalyzer:
             score = 0
             
             r = s['roas']
-            if r >= 4.0:
-                score += 40
-            elif r >= 3.0:
-                score += 35
-            elif r >= 2.5:
-                score += 30
-            elif r >= 2.0:
-                score += 25
-            elif r >= 1.5:
-                score += 15
-            elif r > 0:
-                score += 5
+            if r >= 4.0: score += 40
+            elif r >= 3.0: score += 35
+            elif r >= 2.5: score += 30
+            elif r >= 2.0: score += 25
+            elif r >= 1.5: score += 15
+            elif r > 0: score += 5
 
             wp = (s['total_wastage'] / s['total_spend'] * 100) if s['total_spend'] > 0 else 0
-            if wp <= 5:
-                score += 25
-            elif wp <= 15:
-                score += 20
-            elif wp <= 25:
-                score += 15
-            elif wp <= 35:
-                score += 10
-            else:
-                score += 5
+            if wp <= 5: score += 25
+            elif wp <= 15: score += 20
+            elif wp <= 25: score += 15
+            elif wp <= 35: score += 10
+            else: score += 5
 
             ctr = s['avg_ctr']
-            if ctr >= 5:
-                score += 20
-            elif ctr >= 3:
-                score += 15
-            elif ctr >= 1.5:
-                score += 10
-            elif ctr >= 0.5:
-                score += 5
+            if ctr >= 5: score += 20
+            elif ctr >= 3: score += 15
+            elif ctr >= 1.5: score += 10
+            elif ctr >= 0.5: score += 5
 
             cvr = s['avg_cvr']
-            if cvr >= 10:
-                score += 15
-            elif cvr >= 5:
-                score += 10
-            elif cvr >= 2:
-                score += 5
+            if cvr >= 10: score += 15
+            elif cvr >= 5: score += 10
+            elif cvr >= 2: score += 5
 
             return min(score, 100)
         except:
@@ -470,46 +426,35 @@ class CompleteAnalyzer:
     def get_performance_insights(self):
         summary = self.get_client_summary()
         insights = {
-            'ctr_insights': [],
-            'cvr_insights': [],
-            'roas_insights': [],
-            'acos_insights': [],
-            'cpa_insights': [],
-            'tcoas_insights': [],
-            'content_suggestions': [],
-            'action_items': []
+            'ctr_insights': [], 'cvr_insights': [], 'roas_insights': [],
+            'acos_insights': [], 'cpa_insights': [], 'tcoas_insights': [],
+            'content_suggestions': [], 'action_items': []
         }
 
         try:
             avg_ctr = summary['avg_ctr']
             if avg_ctr < 0.3:
                 insights['ctr_insights'].append({
-                    'level': 'critical',
-                    'metric': 'CTR',
-                    'value': f'{avg_ctr:.2f}%',
+                    'level': 'critical', 'metric': 'CTR', 'value': f'{avg_ctr:.2f}%',
                     'issue': 'CRITICAL: Extremely low CTR - ads not resonating',
                     'action': 'URGENT: Complete ad overhaul needed'
                 })
                 insights['content_suggestions'].extend([
                     '🎯 Add power words: "Best", "Top-Rated", "Premium"',
                     '💰 Show pricing: "50% Off", "Under ₹999", "Free Shipping"',
-                    '⭐ Add badges: "4.5★ Rated", "10K+ Sold", "Amazon\'s Choice"',
+                    '⭐ Add badges: "4.5★ Rated", "10K+ Sold"',
                     '🎁 Use urgency: "Limited Time", "Today Only"',
                     '📸 Use high-res lifestyle images with infographics'
                 ])
             elif avg_ctr < 0.8:
                 insights['ctr_insights'].append({
-                    'level': 'warning',
-                    'metric': 'CTR',
-                    'value': f'{avg_ctr:.2f}%',
+                    'level': 'warning', 'metric': 'CTR', 'value': f'{avg_ctr:.2f}%',
                     'issue': 'Low CTR - below industry average (1-2%)',
                     'action': 'Improve ad copy and test new creatives'
                 })
             elif avg_ctr >= 2.0:
                 insights['ctr_insights'].append({
-                    'level': 'success',
-                    'metric': 'CTR',
-                    'value': f'{avg_ctr:.2f}%',
+                    'level': 'success', 'metric': 'CTR', 'value': f'{avg_ctr:.2f}%',
                     'issue': 'Excellent CTR! Above industry average',
                     'action': 'Keep current strategy - document what works'
                 })
@@ -517,17 +462,13 @@ class CompleteAnalyzer:
             avg_cvr = summary['avg_cvr']
             if avg_cvr < 1.0:
                 insights['cvr_insights'].append({
-                    'level': 'critical',
-                    'metric': 'CVR',
-                    'value': f'{avg_cvr:.2f}%',
+                    'level': 'critical', 'metric': 'CVR', 'value': f'{avg_cvr:.2f}%',
                     'issue': 'Poor conversion - traffic not converting',
                     'action': 'Fix product page, pricing, or targeting'
                 })
             elif avg_cvr < 3.0:
                 insights['cvr_insights'].append({
-                    'level': 'warning',
-                    'metric': 'CVR',
-                    'value': f'{avg_cvr:.2f}%',
+                    'level': 'warning', 'metric': 'CVR', 'value': f'{avg_cvr:.2f}%',
                     'issue': 'Below average conversion',
                     'action': 'Optimize product pages and test pricing'
                 })
@@ -535,25 +476,19 @@ class CompleteAnalyzer:
             roas = summary['roas']
             if roas < 1.0:
                 insights['roas_insights'].append({
-                    'level': 'critical',
-                    'metric': 'ROAS',
-                    'value': f'{roas:.2f}x',
+                    'level': 'critical', 'metric': 'ROAS', 'value': f'{roas:.2f}x',
                     'issue': 'LOSING MONEY - spending more than earning',
                     'action': 'PAUSE campaigns immediately and investigate'
                 })
             elif roas < 2.0:
                 insights['roas_insights'].append({
-                    'level': 'warning',
-                    'metric': 'ROAS',
-                    'value': f'{roas:.2f}x',
+                    'level': 'warning', 'metric': 'ROAS', 'value': f'{roas:.2f}x',
                     'issue': 'Low profitability',
                     'action': 'Reduce bids on poor performers, optimize targeting'
                 })
             elif roas >= 3.0:
                 insights['roas_insights'].append({
-                    'level': 'success',
-                    'metric': 'ROAS',
-                    'value': f'{roas:.2f}x',
+                    'level': 'success', 'metric': 'ROAS', 'value': f'{roas:.2f}x',
                     'issue': 'Excellent ROAS! Profitable campaigns',
                     'action': 'Scale winning campaigns aggressively'
                 })
@@ -562,17 +497,13 @@ class CompleteAnalyzer:
             target_acos = self.target_acos or 30
             if acos > target_acos * 1.5:
                 insights['acos_insights'].append({
-                    'level': 'critical',
-                    'metric': 'ACOS',
-                    'value': f'{acos:.1f}%',
+                    'level': 'critical', 'metric': 'ACOS', 'value': f'{acos:.1f}%',
                     'issue': f'Way above target ({target_acos:.1f}%)',
                     'action': 'Reduce bids immediately, add negatives'
                 })
             elif acos > target_acos:
                 insights['acos_insights'].append({
-                    'level': 'warning',
-                    'metric': 'ACOS',
-                    'value': f'{acos:.1f}%',
+                    'level': 'warning', 'metric': 'ACOS', 'value': f'{acos:.1f}%',
                     'issue': f'Above target ({target_acos:.1f}%)',
                     'action': 'Optimize bids and targeting'
                 })
@@ -580,9 +511,7 @@ class CompleteAnalyzer:
             avg_cpa = summary['avg_cpa']
             if self.target_cpa and avg_cpa > self.target_cpa:
                 insights['cpa_insights'].append({
-                    'level': 'warning',
-                    'metric': 'CPA',
-                    'value': format_currency(avg_cpa),
+                    'level': 'warning', 'metric': 'CPA', 'value': format_currency(avg_cpa),
                     'issue': f'Above target {format_currency(self.target_cpa)}',
                     'action': 'Reduce bids or improve conversion rate'
                 })
@@ -594,11 +523,8 @@ class CompleteAnalyzer:
 
     def classify_keywords_improved(self):
         cats = {
-            'high_potential': [],
-            'low_potential': [],
-            'wastage': [],
-            'opportunities': [],
-            'future_watch': []
+            'high_potential': [], 'low_potential': [], 'wastage': [],
+            'opportunities': [], 'future_watch': []
         }
 
         try:
@@ -616,6 +542,7 @@ class CompleteAnalyzer:
                     kw = safe_str(r.get('Customer Search Term'))
                     camp = safe_str(r.get('Campaign Name'))
                     mt = safe_str(r.get('Match Type'))
+                    cpc = safe_float(r.get('CPC', 0))
 
                     if sp <= 0 and c <= 0:
                         continue
@@ -628,12 +555,12 @@ class CompleteAnalyzer:
                         'Orders': o,
                         'Clicks': c,
                         'CVR': f"{cv:.2f}%",
+                        'CPC': format_currency(cpc),
                         'Campaign': camp,
                         'Match Type': mt,
                         'Reason': ''
                     }
 
-                    # Classification logic
                     if ro >= 2.5 and o >= 1 and sp >= 20:
                         kd['Reason'] = f"Champion! ROAS {ro:.2f}x, {o} orders"
                         cats['high_potential'].append(kd)
@@ -672,15 +599,16 @@ class CompleteAnalyzer:
                     c = safe_int(r.get('Clicks', 0))
                     cv = safe_float(r.get('CVR', 0))
                     ro = safe_float(r.get('ROAS', 0))
+                    cpc = safe_float(r.get('CPC', 0))
 
                     if c >= 3 and sp < 100:
                         if o == 1 and ro >= 1.5:
                             fk.append({
                                 'Keyword': safe_str(r.get('Customer Search Term')),
                                 'Match Type': safe_str(r.get('Match Type')),
-                                'Clicks': c,
-                                'Orders': o,
+                                'Clicks': c, 'Orders': o,
                                 'Spend': format_currency(sp),
+                                'CPC': format_currency(cpc),
                                 'ROAS': f"{ro:.2f}x",
                                 'Status': '🟡 Promising',
                                 'Action': '1 order, monitor for more',
@@ -690,9 +618,9 @@ class CompleteAnalyzer:
                             fk.append({
                                 'Keyword': safe_str(r.get('Customer Search Term')),
                                 'Match Type': safe_str(r.get('Match Type')),
-                                'Clicks': c,
-                                'Orders': o,
+                                'Clicks': c, 'Orders': o,
                                 'Spend': format_currency(sp),
+                                'CPC': format_currency(cpc),
                                 'ROAS': '0.00x',
                                 'Status': '⚪ Watching',
                                 'Action': 'Relevant but no sales yet',
@@ -729,55 +657,39 @@ class CompleteAnalyzer:
                     ct = (tc / ti * 100) if ti > 0 else 0
 
                     s['current_performance'][mt] = {
-                        'spend': ts,
-                        'sales': tsa,
-                        'roas': ro,
-                        'orders': to,
-                        'acos': ac,
-                        'cvr': cv,
-                        'ctr': ct,
-                        'clicks': tc,
-                        'impressions': ti,
-                        'keywords': len(md)
+                        'spend': ts, 'sales': tsa, 'roas': ro, 'orders': to,
+                        'acos': ac, 'cvr': cv, 'ctr': ct, 'clicks': tc,
+                        'impressions': ti, 'keywords': len(md)
                     }
 
                     if mt == 'EXACT':
                         if ro >= 3.0:
                             s['recommendations'].append({
-                                'match_type': 'EXACT',
-                                'action': '✅ SCALE AGGRESSIVELY',
-                                'reason': f'Excellent ROAS {ro:.2f}x - increase bids 20-30%',
-                                'priority': 'HIGH'
+                                'match_type': 'EXACT', 'action': '✅ SCALE AGGRESSIVELY',
+                                'reason': f'Excellent ROAS {ro:.2f}x - increase bids 20-30%', 'priority': 'HIGH'
                             })
                         elif ro >= 2.0:
                             s['recommendations'].append({
-                                'match_type': 'EXACT',
-                                'action': '⚡ SCALE MODERATELY',
-                                'reason': f'Good ROAS {ro:.2f}x - increase bids 10-15%',
-                                'priority': 'MEDIUM'
+                                'match_type': 'EXACT', 'action': '⚡ SCALE MODERATELY',
+                                'reason': f'Good ROAS {ro:.2f}x - increase bids 10-15%', 'priority': 'MEDIUM'
                             })
                     elif mt == 'PHRASE':
                         if ro >= 2.5:
                             s['recommendations'].append({
-                                'match_type': 'PHRASE',
-                                'action': '⚡ SCALE & TEST',
-                                'reason': f'Strong ROAS {ro:.2f}x - find more exact matches',
-                                'priority': 'MEDIUM'
+                                'match_type': 'PHRASE', 'action': '⚡ SCALE & TEST',
+                                'reason': f'Strong ROAS {ro:.2f}x - find more exact matches', 'priority': 'MEDIUM'
                             })
                     elif mt == 'BROAD':
                         if ro < 1.0:
                             s['recommendations'].append({
-                                'match_type': 'BROAD',
-                                'action': '🚨 REDUCE/PAUSE',
-                                'reason': f'Poor ROAS {ro:.2f}x - losing money',
-                                'priority': 'HIGH'
+                                'match_type': 'BROAD', 'action': '🚨 REDUCE/PAUSE',
+                                'reason': f'Poor ROAS {ro:.2f}x - losing money', 'priority': 'HIGH'
                             })
 
             total_spend = sum(p['spend'] for p in s['current_performance'].values())
             total_sales = sum(p['sales'] for p in s['current_performance'].values())
             s['summary'] = {
-                'total_spend': total_spend,
-                'total_sales': total_sales,
+                'total_spend': total_spend, 'total_sales': total_sales,
                 'overall_roas': (total_sales / total_spend) if total_spend > 0 else 0
             }
 
@@ -800,26 +712,17 @@ class CompleteAnalyzer:
                 return pd.DataFrame()
 
             mp = df2.groupby('Match Type').agg({
-                'Spend': 'sum',
-                'Sales': 'sum',
-                'Orders': 'sum',
-                'Clicks': 'sum',
-                'Impressions': 'sum',
+                'Spend': 'sum', 'Sales': 'sum', 'Orders': 'sum',
+                'Clicks': 'sum', 'Impressions': 'sum',
                 'Customer Search Term': 'count'
             }).rename(columns={'Customer Search Term': 'Keywords'})
 
-            mp['ROAS'] = mp.apply(lambda x: (safe_float(x['Sales']) / safe_float(x['Spend'])) 
-                                  if safe_float(x['Spend']) > 0 else 0, axis=1)
-            mp['ACOS'] = mp.apply(lambda x: (safe_float(x['Spend']) / safe_float(x['Sales']) * 100) 
-                                  if safe_float(x['Sales']) > 0 else 0, axis=1)
-            mp['CVR'] = mp.apply(lambda x: (safe_float(x['Orders']) / safe_float(x['Clicks']) * 100) 
-                                 if safe_float(x['Clicks']) > 0 else 0, axis=1)
-            mp['CTR'] = mp.apply(lambda x: (safe_float(x['Clicks']) / safe_float(x['Impressions']) * 100) 
-                                 if safe_float(x['Impressions']) > 0 else 0, axis=1)
-            mp['CPA'] = mp.apply(lambda x: (safe_float(x['Spend']) / safe_float(x['Orders'])) 
-                                 if safe_float(x['Orders']) > 0 else 0, axis=1)
-            mp['AOV'] = mp.apply(lambda x: (safe_float(x['Sales']) / safe_float(x['Orders'])) 
-                                 if safe_float(x['Orders']) > 0 else 0, axis=1)
+            mp['ROAS'] = mp.apply(lambda x: (safe_float(x['Sales']) / safe_float(x['Spend'])) if safe_float(x['Spend']) > 0 else 0, axis=1)
+            mp['ACOS'] = mp.apply(lambda x: (safe_float(x['Spend']) / safe_float(x['Sales']) * 100) if safe_float(x['Sales']) > 0 else 0, axis=1)
+            mp['CVR'] = mp.apply(lambda x: (safe_float(x['Orders']) / safe_float(x['Clicks']) * 100) if safe_float(x['Clicks']) > 0 else 0, axis=1)
+            mp['CTR'] = mp.apply(lambda x: (safe_float(x['Clicks']) / safe_float(x['Impressions']) * 100) if safe_float(x['Impressions']) > 0 else 0, axis=1)
+            mp['CPA'] = mp.apply(lambda x: (safe_float(x['Spend']) / safe_float(x['Orders'])) if safe_float(x['Orders']) > 0 else 0, axis=1)
+            mp['AOV'] = mp.apply(lambda x: (safe_float(x['Sales']) / safe_float(x['Orders'])) if safe_float(x['Orders']) > 0 else 0, axis=1)
 
             return mp
         except Exception as e:
@@ -832,70 +735,48 @@ class CompleteAnalyzer:
         c = self.classify_keywords_improved()
 
         p = {
-            'current_roas': cr,
-            'target_roas': self.target_roas or 3.0,
+            'current_roas': cr, 'target_roas': self.target_roas or 3.0,
             'gap': (self.target_roas or 3.0) - cr,
-            'immediate_actions': [],
-            'short_term': [],
-            'long_term': []
+            'immediate_actions': [], 'short_term': [], 'long_term': []
         }
 
         wc = len(c['wastage'])
         if wc > 0:
-            try:
-                ws = sum(float(k['Spend'].replace('₹', '').replace(',', '')) for k in c['wastage'])
-                p['immediate_actions'].append({
-                    'priority': '🚨 URGENT',
-                    'action': f'Pause {wc} wastage keywords',
-                    'impact': f'Save {format_currency(ws)}/month',
-                    'how': 'Go to Exports → Download Negatives → Upload to Amazon'
-                })
-            except:
-                p['immediate_actions'].append({
-                    'priority': '🚨 URGENT',
-                    'action': f'Pause {wc} wastage keywords',
-                    'impact': 'Significant cost savings',
-                    'how': 'Go to Exports → Download Negatives'
-                })
+            p['immediate_actions'].append({
+                'priority': '🚨 URGENT', 'action': f'Pause {wc} wastage keywords',
+                'impact': 'Significant cost savings',
+                'how': 'Go to Exports → Download Negatives → Upload to Amazon'
+            })
 
         hp = len(c['high_potential'])
         if hp > 0:
             p['short_term'].append({
-                'priority': '🏆 HIGH',
-                'action': f'Scale {hp} winning keywords',
-                'impact': 'Sales increase 20-30%',
-                'how': 'Increase bids 15-25% on champions'
+                'priority': '🏆 HIGH', 'action': f'Scale {hp} winning keywords',
+                'impact': 'Sales increase 20-30%', 'how': 'Increase bids 15-25% on champions'
             })
 
         op = len(c['opportunities'])
         if op > 0:
             p['short_term'].append({
-                'priority': '⚡ MEDIUM',
-                'action': f'Test {op} opportunity keywords',
-                'impact': 'Find new winners',
-                'how': 'Increase bids 10-15%, monitor closely'
+                'priority': '⚡ MEDIUM', 'action': f'Test {op} opportunity keywords',
+                'impact': 'Find new winners', 'how': 'Increase bids 10-15%, monitor closely'
             })
 
         if cr < 1.0:
             p['immediate_actions'].insert(0, {
-                'priority': '🚨 CRITICAL',
-                'action': 'PAUSE UNDERPERFORMING CAMPAIGNS',
+                'priority': '🚨 CRITICAL', 'action': 'PAUSE UNDERPERFORMING CAMPAIGNS',
                 'impact': 'Stop losing money immediately',
                 'how': 'Review product pricing, listings, and targeting'
             })
 
         p['short_term'].append({
-            'priority': '📈 MEDIUM',
-            'action': 'Optimize product listings',
-            'impact': 'CVR improvement 50-100%',
-            'how': 'Better images, A+ content, reviews'
+            'priority': '📈 MEDIUM', 'action': 'Optimize product listings',
+            'impact': 'CVR improvement 50-100%', 'how': 'Better images, A+ content, reviews'
         })
 
         p['long_term'].append({
-            'priority': '🔍 ONGOING',
-            'action': 'Test new keywords weekly',
-            'impact': 'Continuous growth',
-            'how': 'Add 10-20 new keywords per week, analyze performance'
+            'priority': '🔍 ONGOING', 'action': 'Test new keywords weekly',
+            'impact': 'Continuous growth', 'how': 'Add 10-20 new keywords per week'
         })
 
         return p
@@ -920,7 +801,8 @@ class CompleteAnalyzer:
                     cv = safe_float(r.get('CVR', 0))
                     cpc = safe_float(r.get('CPC', 0))
 
-                    if sp < 20 or c < 3:
+                    # FIXED: Skip if CPC is 0 (can't suggest bid)
+                    if sp < 20 or c < 3 or cpc <= 0:
                         continue
 
                     s = {
@@ -991,7 +873,7 @@ class CompleteAnalyzer:
                 except:
                     continue
 
-            return sorted(sug, key=lambda x: safe_float(x['Spend'].replace('₹', '').replace(',', '')), reverse=True)
+            return sorted(sug, key=lambda x: safe_float(x['Spend'].replace('₹', '').replace(',', '').replace('L','').replace('Cr','')), reverse=True)
         except:
             return []
 
@@ -1063,7 +945,7 @@ Date: {datetime.now().strftime('%B %d, %Y')}
 4. Test bids on {len(c['opportunities'])} opportunity keywords
 
 ================================================================================
-Generated by Amazon Ads Dashboard Pro v5.0
+Generated by Amazon Ads Dashboard Pro v6.0
 ================================================================================
 """
         except Exception as e:
@@ -1077,11 +959,9 @@ def init_session_state():
         st.session_state.active_client = None
     if 'agency_name' not in st.session_state:
         st.session_state.agency_name = "Your Agency"
-    if 'client_data_cache' not in st.session_state:
-        st.session_state.client_data_cache = {}
 
 def render_agency_header():
-    st.markdown(f'<div class="agency-header"><h1>🏢 {st.session_state.agency_name}</h1><p>Amazon Ads Dashboard Pro v5.0 - FULLY FIXED</p><small>✅ Number Wrapping Fixed | ✅ Sales Detection Fixed | ✅ Wastage Fixed</small></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="agency-header"><h1>🏢 {st.session_state.agency_name}</h1><p>Amazon Ads Dashboard Pro v6.0 - CPC & NEGATIVES FIXED</p><small>✅ CPC Calculation Fixed | ✅ ASIN Negatives Handled</small></div>', unsafe_allow_html=True)
 
 def render_sidebar():
     with st.sidebar:
@@ -1127,7 +1007,7 @@ def render_sidebar():
                 key="add_industry")
             bug = st.number_input("Monthly Budget (₹)", value=50000, step=5000, key="add_budget")
 
-            st.info("🎯 Performance Targets (Optional - leave 0 for smart defaults)")
+            st.info("🎯 Performance Targets (Optional)")
             c1, c2 = st.columns(2)
             with c1:
                 tacos = st.number_input("Target ACOS %", value=0.0, step=5.0, key="add_acos")
@@ -1164,12 +1044,9 @@ def render_sidebar():
                             cd.target_tcoas = ttcoas if ttcoas > 0 else None
 
                             cd.analyzer = CompleteAnalyzer(
-                                df.copy(deep=True),
-                                nm,
-                                cd.target_acos,
-                                cd.target_roas,
-                                cd.target_cpa,
-                                cd.target_tcoas
+                                df.copy(deep=True), nm,
+                                cd.target_acos, cd.target_roas,
+                                cd.target_cpa, cd.target_tcoas
                             )
 
                             st.session_state.clients[nm] = cd
@@ -1199,7 +1076,6 @@ def render_sidebar():
 
 
 def render_metric_card(label, value, color="#fff"):
-    """Render a metric card with nowrap to prevent text wrapping"""
     return f"""
     <div class="metric-card">
         <div class="metric-label">{label}</div>
@@ -1222,7 +1098,7 @@ def render_dashboard_tab(cl, an):
         health_color = "#22c55e" if h >= 70 else "#facc15" if h >= 50 else "#ef4444"
         st.markdown(f'<div class="info-box"><h2 style="color:{health_color}">Health Score: {h}/100</h2><p><strong>Targets:</strong> ACOS: {tad} | ROAS: {trd} | CPA: {tcpa} | TCoAS: {ttcoas}</p></div>', unsafe_allow_html=True)
 
-        # Financial Metrics - FIXED: Using nowrap CSS
+        # Financial Metrics
         st.markdown("---")
         st.markdown("### 💰 Financial Performance")
         
@@ -1239,7 +1115,7 @@ def render_dashboard_tab(cl, an):
             with col:
                 st.markdown(render_metric_card(label, value, color), unsafe_allow_html=True)
 
-        # Key Metrics - FIXED
+        # Key Metrics
         st.markdown("---")
         st.markdown("### 📈 Key Metrics")
         
@@ -1374,7 +1250,7 @@ def render_keywords_tab(an):
                 df_op = pd.DataFrame(c['opportunities'])
                 st.dataframe(df_op, use_container_width=True, hide_index=True, height=400)
             else:
-                st.info("No opportunity keywords found. These are keywords with decent ROAS (1.5-2.5x) that can improve")
+                st.info("No opportunity keywords found.")
 
         with tabs[2]:
             if c['future_watch']:
@@ -1413,7 +1289,7 @@ def render_keywords_tab(an):
                 df_fsk = pd.DataFrame(fsk)
                 st.dataframe(df_fsk, use_container_width=True, hide_index=True, height=400)
             else:
-                st.info("No future scale candidates yet. These appear when keywords have clicks but limited orders")
+                st.info("No future scale candidates yet.")
 
     except Exception as e:
         st.error(f"❌ Keywords error: {e}")
@@ -1463,7 +1339,7 @@ def render_match_type_tab(an):
                     with col:
                         st.markdown(render_metric_card(label, value), unsafe_allow_html=True)
         else:
-            st.info("No match type data available. Ensure your file has a 'Match Type' column with values: EXACT, PHRASE, or BROAD")
+            st.info("No match type data available.")
 
         st.markdown("---")
         st.markdown("### 🎯 Your Match Type Strategy")
@@ -1473,40 +1349,22 @@ def render_match_type_tab(an):
             for r in s['recommendations']:
                 box = 'danger-box' if r['priority'] == 'HIGH' else 'warning-box' if r['priority'] == 'MEDIUM' else 'info-box'
                 st.markdown(f'<div class="{box}"><strong>{r["match_type"]}:</strong> {r["action"]}<br>📌 Reason: {r["reason"]}<br>🔥 Priority: {r["priority"]}</div>', unsafe_allow_html=True)
-        else:
-            st.info("Analyzing match types... Upload data with Match Type column to see recommendations.")
 
         st.markdown("---")
         st.markdown("### 📚 Match Type Guide")
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            st.markdown('<div class="success-box"><h4>🎯 EXACT Match</h4><strong>When:</strong> Proven winners (ROAS ≥3.0x)<br><strong>Bid:</strong> Aggressive (scale these)<br><strong>Example:</strong> "blue water bottle 1 litre"<br><strong>Use For:</strong> Converting high performers</div>', unsafe_allow_html=True)
+            st.markdown('<div class="success-box"><h4>🎯 EXACT Match</h4><strong>When:</strong> Proven winners (ROAS ≥3.0x)<br><strong>Bid:</strong> Aggressive (scale these)<br><strong>Example:</strong> "blue water bottle 1 litre"</div>', unsafe_allow_html=True)
 
         with c2:
-            st.markdown('<div class="warning-box"><h4>📝 PHRASE Match</h4><strong>When:</strong> Discovery & testing<br><strong>Bid:</strong> Moderate (find winners)<br><strong>Example:</strong> "water bottle" → matches "best water bottle"<br><strong>Use For:</strong> Finding new terms</div>', unsafe_allow_html=True)
+            st.markdown('<div class="warning-box"><h4>📝 PHRASE Match</h4><strong>When:</strong> Discovery & testing<br><strong>Bid:</strong> Moderate (find winners)<br><strong>Example:</strong> "water bottle" → matches "best water bottle"</div>', unsafe_allow_html=True)
 
         with c3:
-            st.markdown('<div class="info-box"><h4>🌐 BROAD Match</h4><strong>When:</strong> Research only<br><strong>Bid:</strong> Low budget tests<br><strong>Example:</strong> "bottle" → matches anything<br><strong>Use For:</strong> Discovery (risky)</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
-        st.markdown("### 🔄 Optimization Workflow")
-        workflow = """
-        <div class="purple-box">
-        <strong>Weekly Optimization Process:</strong><br>
-        1. <strong>START</strong> with PHRASE match (moderate bids)<br>
-        2. <strong>ANALYZE</strong> search terms weekly<br>
-        3. <strong>CONVERT</strong> winners to EXACT (higher bids)<br>
-        4. <strong>ADD</strong> losers as NEGATIVE keywords<br>
-        5. <strong>REPEAT</strong> weekly for continuous improvement
-        </div>
-        """
-        st.markdown(workflow, unsafe_allow_html=True)
+            st.markdown('<div class="info-box"><h4>🌐 BROAD Match</h4><strong>When:</strong> Research only<br><strong>Bid:</strong> Low budget tests<br><strong>Example:</strong> "bottle" → matches anything</div>', unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"❌ Match type error: {e}")
-        with st.expander("🔍 Debug"):
-            st.code(traceback.format_exc())
 
 
 def render_bid_tab(an):
@@ -1516,9 +1374,8 @@ def render_bid_tab(an):
         tad = f"{an.target_acos:.1f}%" if an.target_acos else "30% (default)"
         trd = f"{an.target_roas:.1f}x" if an.target_roas else "3.0x (default)"
         tcpa = format_currency(an.target_cpa) if an.target_cpa else "Not Set"
-        ttcoas = f"{an.target_tcoas:.1f}%" if an.target_tcoas else "Not Set"
 
-        st.markdown(f'<div class="info-box"><strong>🎯 Optimization Targets</strong><br>ACOS: {tad} | ROAS: {trd} | CPA: {tcpa} | TCoAS: {ttcoas}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="info-box"><strong>🎯 Optimization Targets</strong><br>ACOS: {tad} | ROAS: {trd} | CPA: {tcpa}</div>', unsafe_allow_html=True)
 
         sug = an.get_bid_suggestions_improved()
 
@@ -1553,42 +1410,101 @@ def render_bid_tab(an):
             df_sug = pd.DataFrame(filt)
             st.dataframe(df_sug, use_container_width=True, hide_index=True, height=500)
         else:
-            st.info("💡 No bid suggestions available. This could mean:\n- Not enough data (need min ₹20 spend and 3 clicks)\n- All keywords are within target ranges\n- Upload more campaign data for analysis")
+            st.info("💡 No bid suggestions available. Need keywords with CPC > 0, min ₹20 spend and 3 clicks.")
 
     except Exception as e:
         st.error(f"❌ Bid optimization error: {e}")
-        with st.expander("🔍 Debug"):
-            st.code(traceback.format_exc())
 
 
 def render_exports_tab(an, cn):
+    """FIXED: Handle both keyword negatives and product ASIN negatives"""
     try:
         st.header("📥 Export Files")
         c = an.classify_keywords_improved()
         sug = an.get_bid_suggestions_improved()
 
+        # Separate keywords and ASINs from wastage
+        wastage_keywords = []
+        wastage_asins = []
+        
+        for k in c['wastage']:
+            kw = k.get('Keyword', '')
+            if is_asin(kw):
+                wastage_asins.append(k)
+            else:
+                wastage_keywords.append(k)
+
         exp_cols = st.columns(3)
 
         with exp_cols[0]:
-            st.subheader("🚫 Negative Keywords")
-            w = c['wastage']
-            if w:
-                nd = [{'Campaign': k['Campaign'], 'Ad Group': '', 'Keyword': k['Keyword'], 'Match Type': 'Negative Exact', 'Status': 'Enabled'} for k in w]
+            st.subheader("🚫 Negative Keywords & Products")
+            
+            # Create two sheets: one for keywords, one for ASINs
+            if wastage_keywords or wastage_asins:
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as wr:
-                    pd.DataFrame(nd).to_excel(wr, index=False, sheet_name='Negatives')
+                    # Sheet 1: Negative Keywords (with match types)
+                    if wastage_keywords:
+                        nk_data = []
+                        for k in wastage_keywords:
+                            nk_data.append({
+                                'Campaign': k['Campaign'],
+                                'Ad Group': '',
+                                'Keyword': k['Keyword'],
+                                'Match Type': 'Negative Exact',
+                                'Status': 'Enabled',
+                                'Type': 'Keyword Negative'
+                            })
+                        pd.DataFrame(nk_data).to_excel(wr, sheet_name='Negative Keywords', index=False)
+                    
+                    # Sheet 2: Negative Products (ASINs - no match type)
+                    if wastage_asins:
+                        np_data = []
+                        for k in wastage_asins:
+                            np_data.append({
+                                'Campaign': k['Campaign'],
+                                'Ad Group': '',
+                                'ASIN': k['Keyword'],  # This is the ASIN
+                                'Status': 'Enabled',
+                                'Type': 'Product Negative',
+                                'Note': 'Add to Product Targeting > Negative Products'
+                            })
+                        pd.DataFrame(np_data).to_excel(wr, sheet_name='Negative Products', index=False)
+                    
+                    # Sheet 3: Combined Summary
+                    summary_data = []
+                    if wastage_keywords:
+                        summary_data.append({'Type': 'Keyword Negatives', 'Count': len(wastage_keywords), 'Instructions': 'Upload to Campaign > Negative Keywords'})
+                    if wastage_asins:
+                        summary_data.append({'Type': 'Product Negatives (ASINs)', 'Count': len(wastage_asins), 'Instructions': 'Upload to Product Targeting > Negative Products'})
+                    if summary_data:
+                        pd.DataFrame(summary_data).to_excel(wr, sheet_name='Instructions', index=False)
+                
                 out.seek(0)
+                
+                total_negatives = len(wastage_keywords) + len(wastage_asins)
                 st.download_button(
-                    f"📥 Download Negatives ({len(nd)} keywords)",
+                    f"📥 Download Negatives ({total_negatives} total)",
                     data=out,
                     file_name=f"Negatives_{cn}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     key="neg_download"
                 )
-                st.error(f"🚨 {len(nd)} keywords to add as negatives")
+                
+                # Show breakdown
+                if wastage_keywords:
+                    st.error(f"🚨 {len(wastage_keywords)} keyword negatives")
+                if wastage_asins:
+                    st.warning(f"📦 {len(wastage_asins)} product ASIN negatives")
+                    
+                st.info("""
+                **How to upload:**
+                - **Keywords**: Campaign → Negative Keywords → Upload
+                - **ASINs**: Product Targeting → Negative Products → Enter ASIN
+                """)
             else:
-                st.success("✅ No negative keywords needed")
+                st.success("✅ No negatives needed")
 
         with exp_cols[1]:
             st.subheader("💰 Bid Adjustments")
@@ -1665,6 +1581,8 @@ def render_report_tab(cl, an):
                 }, {
                     'Metric': 'CTR', 'Value': f"{s['avg_ctr']:.2f}%"
                 }, {
+                    'Metric': 'Avg CPC', 'Value': format_currency(s['avg_cpc'])
+                }, {
                     'Metric': 'Health Score', 'Value': f"{an.get_health_score()}/100"
                 }])
                 summary_df.to_excel(wr, sheet_name='Summary', index=False)
@@ -1675,8 +1593,6 @@ def render_report_tab(cl, an):
                     pd.DataFrame(c['opportunities']).to_excel(wr, sheet_name='Opportunities', index=False)
                 if c['wastage']:
                     pd.DataFrame(c['wastage']).to_excel(wr, sheet_name='Wastage', index=False)
-                if c['future_watch']:
-                    pd.DataFrame(c['future_watch']).to_excel(wr, sheet_name='Future Watch', index=False)
             out.seek(0)
             st.download_button(
                 "📊 Download Report (Excel)",
@@ -1706,8 +1622,7 @@ def render_all_clients_tab():
                     s = c.analyzer.get_client_summary()
                     h = c.analyzer.get_health_score()
                     data.append({
-                        'Client': n,
-                        'Health': f"{h}/100",
+                        'Client': n, 'Health': f"{h}/100",
                         'Spend': format_currency(s['total_spend']),
                         'Sales': format_currency(s['total_sales']),
                         'ROAS': f"{s['roas']:.2f}x",
@@ -1718,7 +1633,6 @@ def render_all_clients_tab():
                         'Status': '🟢' if h >= 70 else '🟡' if h >= 50 else '🔴'
                     })
                 except Exception as e:
-                    print(f"Error processing client {n}: {e}")
                     continue
 
         if data:
@@ -1751,18 +1665,15 @@ def render_dashboard():
     if not st.session_state.clients:
         welcome_msg = """
         <div class="info-box">
-        <h3>👋 Welcome to Amazon Ads Dashboard Pro v5.0 - FULLY FIXED!</h3>
+        <h3>👋 Welcome to Amazon Ads Dashboard Pro v6.0!</h3>
         <br>
         <strong>✅ All Issues Fixed:</strong>
         <ul>
-        <li>✅ FIXED: Number wrapping - values stay on one line</li>
-        <li>✅ FIXED: Sales column detection - handles all Amazon report formats</li>
-        <li>✅ FIXED: Wastage calculation - only zero-sales spend</li>
-        <li>✅ FIXED: Multiple client data isolation</li>
-        <li>✅ FIXED: Scale keywords display</li>
-        <li>✅ FIXED: Match type performance display</li>
-        <li>✅ NEW: TCoAS (Total Cost of Advertising Sales) support</li>
-        <li>✅ NEW: Enhanced CTR-based content suggestions</li>
+        <li>✅ FIXED: CPC calculation from Spend/Clicks when CPC column missing</li>
+        <li>✅ FIXED: Bid suggestions now show correct Current CPC and Suggested Bid</li>
+        <li>✅ FIXED: Negative keywords vs Product ASINs handled separately</li>
+        <li>✅ Keywords get match types (Negative Exact/Phrase)</li>
+        <li>✅ ASINs don't need match types - added to Product Targeting negatives</li>
         </ul>
         <br>
         <strong>👈 Get started by adding a client from the sidebar!</strong>
@@ -1788,13 +1699,8 @@ def render_dashboard():
     an = cl.analyzer
 
     tabs = st.tabs([
-        "📊 Dashboard",
-        "🎯 Keywords",
-        "💡 Bid Optimization",
-        "📊 Match Types",
-        "📝 Reports",
-        "👥 All Clients",
-        "📥 Exports"
+        "📊 Dashboard", "🎯 Keywords", "💡 Bid Optimization",
+        "📊 Match Types", "📝 Reports", "👥 All Clients", "📥 Exports"
     ])
 
     with tabs[0]:
@@ -1822,8 +1728,8 @@ def main():
     footer = f"""
     <div style="text-align:center;color:#94a3b8;padding:1rem;margin-top:2rem;border-top:1px solid rgba(148,163,184,0.3);">
     <strong>{st.session_state.agency_name}</strong><br>
-    Amazon Ads Dashboard Pro v5.0 - FULLY FIXED<br>
-    <small>✅ Number Wrapping Fixed | ✅ Sales Detection Fixed | ✅ Wastage Fixed</small>
+    Amazon Ads Dashboard Pro v6.0 - CPC & NEGATIVES FIXED<br>
+    <small>✅ CPC Calculation Fixed | ✅ ASIN Negatives Handled</small>
     </div>
     """
     st.markdown(footer, unsafe_allow_html=True)
