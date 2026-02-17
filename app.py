@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v6.2 (Big-Date & Colour Edition)
+Amazon Ads Agency Dashboard Pro v7.0
 
 - CPC calculation from Spend/Clicks
 - ASIN negative handling
@@ -9,7 +9,7 @@ Amazon Ads Agency Dashboard Pro v6.2 (Big-Date & Colour Edition)
 - TCoAS (Total Cost of Advertising Sales) support
 - Amazon BULK upload–ready bid optimization export
 - S.No starts from 1 in all tables
-- Brighter, more attractive colour theme (red for negatives)
+- Premium dark-glass UI with clear colours (red for negatives)
 - Placement-wise recommendations when placement data is present
 """
 
@@ -41,18 +41,19 @@ def load_custom_css():
     <style>
     .main {
         padding-top: 0.5rem;
-        background: radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%);
+        background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
     }
 
     /* Header */
     .agency-header {
-        background: radial-gradient(circle at top left, #a855f7 0, #1e293b 40%, #020617 100%);
+        background:
+            radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
         padding: 1.4rem 1.8rem;
         border-radius: 18px;
         margin-bottom: 1.2rem;
         color: #e5e7eb;
-        box-shadow: 0 18px 50px rgba(15,23,42,0.85);
-        border: 1px solid rgba(148,163,184,0.4);
+        box-shadow: 0 18px 50px rgba(15,23,42,0.9);
+        border: 1px solid rgba(148,163,184,0.5);
     }
     .agency-header h1 {
         margin: 0;
@@ -66,15 +67,16 @@ def load_custom_css():
 
     /* Metric cards */
     div[data-testid="stMetric"] {
-        background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
+        background:
+            radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
         border-radius: 16px;
         padding: 1.1rem 0.9rem;
         border: 1px solid #1f2937;
         box-shadow: 0 16px 40px rgba(15,23,42,0.9);
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 0.8rem !important;
-        color: #9ca3af !important;
+        font-size: 0.82rem !important;
+        color: #e5e7eb !important;   /* brighter for readability */
         white-space: normal !important;
     }
     div[data-testid="stMetricValue"] {
@@ -166,7 +168,6 @@ def load_custom_css():
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
-
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -263,7 +264,6 @@ def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
     df.insert(0, "S.No", df.index + 1)
     return df
 
-
 # -----------------------------------------------------------------------------
 # Data structures
 # -----------------------------------------------------------------------------
@@ -279,7 +279,6 @@ class ClientData:
         self.target_roas: float | None = None
         self.target_cpa: float | None = None
         self.target_tcoas: float | None = None
-
 
 class CompleteAnalyzer:
     REQUIRED_COLUMNS = ["Customer Search Term", "Campaign Name", "Spend", "Clicks"]
@@ -318,7 +317,7 @@ class CompleteAnalyzer:
 
         df.columns = df.columns.str.strip()
 
-        # Mapping extended for 7 / 14 / 30 day reports so big-date files work.[file:70]
+        # Mapping extended for 7 / 14 / 30 day reports so big-date files work.[file:70][file:1]
         mapping = {
             # search term
             "customer search term": "Customer Search Term",
@@ -431,7 +430,7 @@ class CompleteAnalyzer:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
         # CPC from Spend/Clicks when missing.[file:70]
-        df["CPC_Calculated"] = df.apply(
+        df["Cpc_Calculated"] = df.apply(
             lambda x: safe_float(x.get("Spend", 0))
             / safe_float(x.get("Clicks", 1))
             if safe_float(x.get("Clicks", 0)) > 0
@@ -441,7 +440,7 @@ class CompleteAnalyzer:
         df["CPC"] = df.apply(
             lambda x: safe_float(x.get("CPC", 0))
             if safe_float(x.get("CPC", 0)) > 0
-            else safe_float(x.get("CPC_Calculated", 0)),
+            else safe_float(x.get("Cpc_Calculated", 0)),
             axis=1,
         )
 
@@ -820,7 +819,10 @@ class CompleteAnalyzer:
 
             placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
             if not placement_cols:
-                res["message"] = "Current report has no placement column. Use a placement/campaign report for placement-wise tips."
+                res["message"] = (
+                    "Current report has no placement column. "
+                    "Use a placement/campaign report for placement-wise tips."
+                )
                 return res
 
             col = placement_cols[0]
@@ -1189,12 +1191,11 @@ Reduce    : {len(c['low_potential'])}
 Pause     : {len(c['wastage'])}
 
 ===============================================================================
-Generated by Amazon Ads Dashboard Pro v6.2
+Generated by Amazon Ads Dashboard Pro v7.0
 ===============================================================================
 """
         except Exception as e:
             return f"Error generating report: {e}"
-
 
 # -----------------------------------------------------------------------------
 # Session & layout helpers
@@ -1207,18 +1208,16 @@ def init_session_state():
     if "agency_name" not in st.session_state:
         st.session_state.agency_name = "Your Agency"
 
-
 def render_agency_header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v6.2</h1>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.0</h1>
             <p>CPC & negatives fixed • Big-date reports supported • Amazon bulk‑ready bid exports</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
 
 def render_sidebar():
     with st.sidebar:
@@ -1356,7 +1355,6 @@ def render_sidebar():
                             st.session_state.active_client = None
                         st.rerun()
 
-
 # -----------------------------------------------------------------------------
 # Tabs
 # -----------------------------------------------------------------------------
@@ -1407,9 +1405,14 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
         st.metric("Avg CPC", format_currency(s["avg_cpc"]))
 
     wp = s["total_wastage"] / s["total_spend"] * 100 if s["total_spend"] > 0 else 0
-    st.metric(
-        label="Wastage (zero‑sales spend)",
-        value=f"{format_currency(s['total_wastage'])} ({wp:.1f}%)",
+    st.markdown(
+        f"""
+        <div class="danger-box">
+            <strong>Wastage (zero‑sales spend)</strong><br>
+            {format_currency(s["total_wastage"])} ({wp:.1f}%)
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.subheader("💡 Performance insights")
@@ -1475,7 +1478,6 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
         )
         for txt in ins["content_suggestions"]:
             st.markdown(f"- {txt}")
-
 
 def render_keywords_tab(an: CompleteAnalyzer):
     st.subheader("🎯 Keyword groups")
@@ -1558,7 +1560,6 @@ def render_keywords_tab(an: CompleteAnalyzer):
         else:
             st.success("No pure wastage keywords – great!")
 
-
 def render_bid_tab(an: CompleteAnalyzer):
     st.subheader("💡 Bid optimization")
     sug = an.get_bid_suggestions_improved()
@@ -1608,7 +1609,6 @@ def render_bid_tab(an: CompleteAnalyzer):
         use_container_width=True,
         height=500,
     )
-
 
 def render_exports_tab(an: CompleteAnalyzer, client_name: str):
     st.subheader("📥 Exports")
@@ -1698,7 +1698,6 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         else:
             st.info("No data for this client.")
 
-
 def render_report_tab(cl: ClientData, an: CompleteAnalyzer):
     st.subheader("📝 Client report")
     txt = an.generate_client_report()
@@ -1710,7 +1709,6 @@ def render_report_tab(cl: ClientData, an: CompleteAnalyzer):
         mime="text/plain",
         use_container_width=True,
     )
-
 
 def render_all_clients_tab():
     st.subheader("👥 All clients overview")
@@ -1737,7 +1735,6 @@ def render_all_clients_tab():
         st.info("No clients with data yet.")
         return
     st.dataframe(add_serial_column(pd.DataFrame(data)), use_container_width=True)
-
 
 # -----------------------------------------------------------------------------
 # Main layout
@@ -1784,7 +1781,6 @@ def render_dashboard():
     with tabs[5]:
         render_all_clients_tab()
 
-
 def main():
     load_custom_css()
     init_session_state()
@@ -1795,12 +1791,11 @@ def main():
         """
         <hr>
         <div style="text-align:center;color:#64748b;font-size:0.8rem;padding:0.6rem 0;">
-        Amazon Ads Dashboard Pro v6.2 – tuned for big-date reports and attractive visuals.
+        Amazon Ads Dashboard Pro v7.0 – tuned for big-date reports and premium visuals.
         </div>
         """,
         unsafe_allow_html=True,
     )
-
 
 if __name__ == "__main__":
     main()
