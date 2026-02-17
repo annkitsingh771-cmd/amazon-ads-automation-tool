@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Amazon Ads Agency Dashboard Pro v7.1
 
-- CPC calculation from Spend/Clicks
-- ASIN negative handling
-- Supports 7/14/30-day sales & orders columns (big-date reports)
-- Reads your headers: '7 Day Total Sales (₹)', '7 Day Total Orders (#)' etc.
-- Falls back to Advertised + Other SKU sales if needed
-- TCoAS (Total Cost of Advertising Sales) support
-- Amazon BULK upload–ready bid optimization export
-- S.No starts from 1 in all tables
-- Premium dark-glass UI with clear colours (red for negatives)
-- Placement-wise recommendations when placement data is present
+"""
+Amazon Ads Dashboard Pro v7.2 (Sales Fix + Premium UI)
+
+Fixes:
+- Sales/Orders/ROAS/TCoAS/CVR not showing for big-date reports:
+  * Auto-selects correct Excel sheet
+  * Smart column detection for 7/14/30 day Sales & Orders (currency variations)
+  * Robust numeric parsing for formatted currency strings
+- S.No starts from 1 and hides default index (no 0 index visible)
+- Premium UI with high-contrast tables and clearer metric labels
+- Placement-wise recommendations when placement data exists
 """
 
 import io
 import re
 import traceback
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 import streamlit as st
+
 
 # -----------------------------------------------------------------------------
 # Streamlit config
@@ -35,8 +34,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
 # -----------------------------------------------------------------------------
-# Styling
+# Premium styling
 # -----------------------------------------------------------------------------
 def load_custom_css():
     css = """
@@ -48,29 +48,20 @@ def load_custom_css():
 
     /* Header */
     .agency-header {
-        background:
-            radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
+        background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
         padding: 1.4rem 1.8rem;
         border-radius: 18px;
-        margin-bottom: 1.2rem;
+        margin-bottom: 1.1rem;
         color: #e5e7eb;
         box-shadow: 0 18px 50px rgba(15,23,42,0.9);
         border: 1px solid rgba(148,163,184,0.5);
     }
-    .agency-header h1 {
-        margin: 0;
-        font-size: 1.5rem;
-    }
-    .agency-header p {
-        margin: 0.3rem 0 0 0;
-        font-size: 0.9rem;
-        color: #e0e7ff;
-    }
+    .agency-header h1 { margin: 0; font-size: 1.5rem; }
+    .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
 
     /* Metric cards */
     div[data-testid="stMetric"] {
-        background:
-            radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
+        background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
         border-radius: 16px;
         padding: 1.1rem 0.9rem;
         border: 1px solid #1f2937;
@@ -88,7 +79,7 @@ def load_custom_css():
         word-break: break-word !important;
     }
 
-    /* Sidebar number inputs */
+    /* Sidebar inputs */
     div[data-testid="stNumberInput"] > label {
         font-size: 0.75rem;
         line-height: 1.15;
@@ -108,1730 +99,965 @@ def load_custom_css():
 
     /* Info / status boxes */
     .info-box {
-        background: radial-gradient(circle at top left, rgba(59,130,246,0.35), rgba(15,23,42,0.98));
+        background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
         border-left: 4px solid #3b82f6;
-        padding: 0.9rem 1rem;
+        padding: 0.95rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
+        color: #e5e7eb;
     }
     .success-box {
         background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
         border-left: 4px solid #22c55e;
-        padding: 0.9rem 1rem;
+        padding: 0.95rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         color: #dcfce7;
     }
     .warning-box {
-        background: radial-gradient(circle at top left, rgba(250,204,21,0.35), rgba(77,54,10,0.98));
+        background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
         border-left: 4px solid #eab308;
-        padding: 0.9rem 1rem;
+        padding: 0.95rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         color: #fef9c3;
     }
     .danger-box {
         background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
         border-left: 4px solid #ef4444;
-        padding: 0.9rem 1rem;
+        padding: 0.95rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         color: #fee2e2;
-    }
-
-    .purple-box {
-        background: radial-gradient(circle at top left, rgba(129,140,248,0.35), rgba(30,64,175,0.98));
-        border-left: 4px solid #8b5cf6;
-        padding: 0.9rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.9rem;
-        color: #e0e7ff;
     }
     .cyan-box {
         background: radial-gradient(circle at top left, rgba(6,182,212,0.35), rgba(8,47,73,0.98));
         border-left: 4px solid #06b6d4;
-        padding: 0.9rem 1rem;
+        padding: 0.95rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         color: #cffafe;
     }
 
-    /* Tables */
-    .blank > div[data-testid="stDataFrame"] table {
-        border-radius: 12px;
+    /* Dataframe: high contrast header & cells */
+    div[data-testid="stDataFrame"] {
+        border-radius: 14px;
+        border: 1px solid rgba(148,163,184,0.35);
         overflow: hidden;
+        box-shadow: 0 14px 36px rgba(15,23,42,0.65);
+    }
+    div[data-testid="stDataFrame"] thead tr th {
+        background: linear-gradient(135deg, rgba(99,102,241,0.35), rgba(2,6,23,0.95)) !important;
+        color: #f8fafc !important;
+        font-weight: 700 !important;
+        border-bottom: 1px solid rgba(148,163,184,0.35) !important;
+    }
+    div[data-testid="stDataFrame"] tbody tr td {
+        color: #e5e7eb !important;
+        background: rgba(2,6,23,0.65) !important;
+        border-bottom: 1px solid rgba(148,163,184,0.14) !important;
     }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
+
 # -----------------------------------------------------------------------------
-# Helper functions
+# Robust parsing helpers
 # -----------------------------------------------------------------------------
-def safe_float(value, default: float = 0.0) -> float:
-    try:
-        if pd.isna(value) or value == "" or value is None:
-            return default
-        if isinstance(value, (int, float)):
-            return float(value)
-        val_str = (
-            str(value)
-            .replace("₹", "")
-            .replace("$", "")
-            .replace(",", "")
-            .replace("%", "")
-            .strip()
-        )
-        return float(val_str) if val_str else default
-    except Exception:
-        return default
-
-
-def safe_int(value, default: int = 0) -> int:
-    try:
-        if pd.isna(value) or value == "" or value is None:
-            return default
-        if isinstance(value, (int, float)):
-            return int(value)
-        return int(
-            float(
-                str(value)
-                .replace(",", "")
-                .replace("₹", "")
-                .replace("$", "")
-                .strip()
-            )
-        )
-    except Exception:
-        return default
-
-
 def safe_str(value, default: str = "N/A") -> str:
     try:
-        if pd.isna(value) or value == "" or value is None:
+        if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
             return default
         return str(value).strip()
     except Exception:
         return default
 
 
-def format_currency(value) -> str:
+def parse_number(value, default: float = 0.0) -> float:
+    """
+    Very robust numeric parser:
+    - Works with '₹1,234.50', 'INR 1234', '[$₹-en-US]18.96', '(123.4)' etc.
+    - Extracts the first numeric token found.
+    """
     try:
-        val = safe_float(value, 0)
-        if val >= 10_000_000:
-            return f"₹{val/10_000_000:.2f}Cr"
-        if val >= 100_000:
-            return f"₹{val/100_000:.2f}L"
-        return f"₹{val:,.2f}"
+        if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        s = str(value).strip()
+        s = s.replace(",", "")
+        # parenthesis negative
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+
+        # extract first number token
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        if not m:
+            return default
+        return float(m.group(0))
     except Exception:
-        return "₹0.00"
+        return default
+
+
+def to_numeric_series(series: pd.Series) -> pd.Series:
+    return series.apply(lambda x: parse_number(x, 0.0)).astype(float)
+
+
+def format_currency(value) -> str:
+    v = parse_number(value, 0.0)
+    if v >= 10_000_000:
+        return f"₹{v/10_000_000:.2f}Cr"
+    if v >= 100_000:
+        return f"₹{v/100_000:.2f}L"
+    return f"₹{v:,.2f}"
 
 
 def format_number(value) -> str:
-    try:
-        val = safe_int(value, 0)
-        if val >= 10_000_000:
-            return f"{val/10_000_000:.2f}Cr"
-        if val >= 100_000:
-            return f"{val/100_000:.2f}L"
-        if val >= 1_000:
-            return f"{val:,}"
-        return str(val)
-    except Exception:
-        return "0"
+    v = int(parse_number(value, 0.0))
+    if v >= 10_000_000:
+        return f"{v/10_000_000:.2f}Cr"
+    if v >= 100_000:
+        return f"{v/100_000:.2f}L"
+    if v >= 1000:
+        return f"{v:,}"
+    return str(v)
+
+
+def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return df
+    out = df.reset_index(drop=True).copy()
+    out.insert(0, "S.No", range(1, len(out) + 1))
+    return out
 
 
 def is_asin(value) -> bool:
-    if not value or pd.isna(value):
-        return False
-    val_str = str(value).strip().upper()
-    return bool(re.match(r"^[B][0-9A-Z]{9,}$", val_str))
+    val = safe_str(value, "")
+    return bool(re.match(r"^[B][0-9A-Z]{9,}$", val.upper()))
 
 
 def get_negative_type(value) -> str:
     return "PRODUCT" if is_asin(value) else "KEYWORD"
 
 
-def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or len(df) == 0:
-        return df
-    df = df.reset_index(drop=True).copy()
-    df.insert(0, "S.No", df.index + 1)
-    return df
+# -----------------------------------------------------------------------------
+# File reading (auto-sheet selection)
+# -----------------------------------------------------------------------------
+REQUIRED_HINTS = [
+    "customer search term",
+    "campaign name",
+    "spend",
+    "clicks",
+]
+
+
+def _score_sheet_columns(cols: List[str]) -> int:
+    cols_l = [c.lower().strip() for c in cols]
+    score = 0
+    for h in REQUIRED_HINTS:
+        if any(h == c or h in c for c in cols_l):
+            score += 1
+    return score
+
+
+def read_uploaded_report(uploaded_file) -> pd.DataFrame:
+    name = uploaded_file.name.lower()
+
+    if name.endswith(".csv"):
+        # try common CSV reading
+        try:
+            return pd.read_csv(uploaded_file)
+        except Exception:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, sep=";")
+
+    # Excel: choose best sheet automatically
+    xls = pd.ExcelFile(uploaded_file)
+    best_df = None
+    best_score = -1
+    best_rows = -1
+
+    for sh in xls.sheet_names:
+        try:
+            tmp = pd.read_excel(xls, sheet_name=sh)
+        except Exception:
+            continue
+
+        if tmp is None or len(tmp) == 0:
+            continue
+
+        score = _score_sheet_columns(list(tmp.columns))
+        rows = int(tmp.shape[0])
+
+        if score > best_score or (score == best_score and rows > best_rows):
+            best_score = score
+            best_rows = rows
+            best_df = tmp
+
+    if best_df is None:
+        # fallback to first sheet
+        return pd.read_excel(uploaded_file)
+
+    return best_df
+
 
 # -----------------------------------------------------------------------------
-# Data structures
+# Analyzer
 # -----------------------------------------------------------------------------
-class ClientData:
-    def __init__(self, name, industry: str = "E-commerce", budget: float = 50_000):
-        self.name = name
-        self.industry = industry
-        self.monthly_budget = budget
-        self.analyzer: "CompleteAnalyzer | None" = None
-        self.added_date = datetime.now()
-        self.contact_email: str = ""
-        self.target_acos: float | None = None
-        self.target_roas: float | None = None
-        self.target_cpa: float | None = None
-        self.target_tcoas: float | None = None
+def pick_best_column(columns_lower: List[str], patterns: List[str]) -> Optional[str]:
+    for pat in patterns:
+        rx = re.compile(pat)
+        matches = [c for c in columns_lower if rx.search(c)]
+        if matches:
+            # choose the shortest match (usually the cleanest)
+            return sorted(matches, key=len)[0]
+    return None
 
 
 class CompleteAnalyzer:
-    REQUIRED_COLUMNS = ["Customer Search Term", "Campaign Name", "Spend", "Clicks"]
-
     def __init__(
         self,
         df: pd.DataFrame,
         client_name: str,
-        target_acos: float | None = None,
-        target_roas: float | None = None,
-        target_cpa: float | None = None,
-        target_tcoas: float | None = None,
+        target_acos: Optional[float] = None,
+        target_roas: Optional[float] = None,
+        target_cpa: Optional[float] = None,
+        target_tcoas: Optional[float] = None,
     ):
         self.client_name = client_name
         self.target_acos = target_acos
         self.target_roas = target_roas
         self.target_cpa = target_cpa
         self.target_tcoas = target_tcoas
-        self.df: pd.DataFrame | None = None
-        self.raw_df: pd.DataFrame | None = None
-        self.error: str | None = None
-        self.column_mapping: Dict[str, str] = {}
-        try:
-            self.raw_df = df.copy(deep=True)
-            self.df = self._validate_and_prepare_data(df.copy(deep=True))
-        except Exception as e:
-            self.error = str(e)
-            raise ValueError(f"Validation failed: {e}")
 
-    # ------------------------------------------------------------------ #
-    # Data prep
-    # ------------------------------------------------------------------ #
-    def _validate_and_prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        self.df: Optional[pd.DataFrame] = None
+        self.sales_source: str = ""
+        self.orders_source: str = ""
+        self.spend_source: str = ""
+        self.clicks_source: str = ""
+        self.impr_source: str = ""
+
+        self.df = self._prepare(df)
+
+    def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or len(df) == 0:
-            raise ValueError("Empty DataFrame")
+            raise ValueError("Empty file / sheet")
 
-        df.columns = df.columns.str.strip()
+        df = df.copy()
+        df.columns = [safe_str(c, "").strip() for c in df.columns]
 
-        # Mapping includes your real headers like '7 Day Total Sales (₹)' and '7 Day Total Orders (#)'. [file:1]
-        mapping = {
-            # search term
-            "customer search term": "Customer Search Term",
-            "search term": "Customer Search Term",
-            "keyword": "Customer Search Term",
-            "searchterm": "Customer Search Term",
-            "customer_search_term": "Customer Search Term",
-            "search terms": "Customer Search Term",
-            # campaign / ad group
-            "campaign": "Campaign Name",
-            "campaign name": "Campaign Name",
-            "campaign_name": "Campaign Name",
-            "ad group": "Ad Group Name",
-            "ad group name": "Ad Group Name",
-            "adgroup": "Ad Group Name",
-            "ad_group_name": "Ad Group Name",
-            # match type
-            "match type": "Match Type",
-            "matchtype": "Match Type",
-            "match_type": "Match Type",
-            # SALES – 7/14/30 day variants
-            "7 day total sales": "Sales",
-            "7 day total sales (₹)": "Sales",
-            "7 day total sales ($)": "Sales",
-            "7 day total sales(₹)": "Sales",
-            "7 day sales": "Sales",
-            "7 day total revenue": "Sales",
-            "14 day total sales": "Sales",
-            "14 day total sales (₹)": "Sales",
-            "14 day total sales ($)": "Sales",
-            "30 day total sales": "Sales",
-            "30 day total sales (₹)": "Sales",
-            "30 day total sales ($)": "Sales",
-            "total sales": "Sales",
-            "sales": "Sales",
-            "revenue": "Sales",
-            # detailed sales we can also use later
-            "7 day advertised sku sales (₹)": "Sales_Advertised",
-            "7 day other sku sales (₹)": "Sales_Other",
-            # ORDERS – 7/14/30 day variants
-            "7 day total orders": "Orders",
-            "7 day total orders (#)": "Orders",
-            "7 day orders": "Orders",
-            "7 day total units": "Orders",
-            "7 day ordered units": "Orders",
-            "14 day total orders": "Orders",
-            "14 day total orders (#)": "Orders",
-            "30 day total orders": "Orders",
-            "30 day total orders (#)": "Orders",
-            "total orders": "Orders",
-            "orders": "Orders",
-            "units": "Orders",
-            # Spend/Cost
-            "cost": "Spend",
-            "spend": "Spend",
-            "ad spend": "Spend",
-            "spend (₹)": "Spend",
-            "spend ($)": "Spend",
-            # Impressions & clicks
-            "impressions": "Impressions",
-            "imps": "Impressions",
-            "clicks": "Clicks",
-            # CPC
-            "cpc": "CPC",
-            "cost per click (cpc)": "CPC",
-            "cost per click": "CPC",
-            "avg cpc": "CPC",
-            "average cpc": "CPC",
-        }
-
-        df.columns = df.columns.str.lower().str.strip()
-        for old, new in mapping.items():
-            key = old.lower().strip()
-            if key in df.columns:
-                df.rename(columns={key: new}, inplace=True)
-                self.column_mapping[old] = new
-
-        df.columns = [c.title() for c in df.columns]
-
-        missing = [c for c in self.REQUIRED_COLUMNS if c not in df.columns]
-        if missing:
-            raise ValueError(
-                f"Missing required columns: {missing}. Available: {list(df.columns)}"
-            )
-
-        optional_numeric = ["Sales", "Orders", "Impressions", "Cpc"]
-        optional_text = ["Ad Group Name", "Match Type"]
-        for col in optional_numeric:
-            if col not in df.columns:
-                df[col] = 0
-        for col in optional_text:
-            if col not in df.columns:
-                df[col] = "N/A"
-
-        if "Cpc" in df.columns and "CPC" not in df.columns:
-            df["CPC"] = df["Cpc"]
-
-        numeric_cols = [
-            "Spend",
-            "Sales",
-            "Sales_Advertised",
-            "Sales_Other",
-            "Clicks",
-            "Impressions",
-            "Orders",
-            "Cpc",
-            "CPC",
-        ]
-        for col in numeric_cols:
-            if col in df.columns:
-                if df[col].dtype == "object":
-                    df[col] = (
-                        df[col]
-                        .astype(str)
-                        .str.replace("₹", "")
-                        .str.replace("$", "")
-                        .str.replace(",", "")
-                        .str.replace("%", "")
-                        .str.replace("(", "-")
-                        .str.replace(")", "")
-                        .str.strip()
-                    )
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-        # If Sales ended up 0 but we have detailed SKU sales, rebuild Sales from them. [file:1]
-        if "Sales" in df.columns:
-            if df["Sales"].sum() == 0:
-                adv = df["Sales_Advertised"] if "Sales_Advertised" in df.columns else 0
-                oth = df["Sales_Other"] if "Sales_Other" in df.columns else 0
-                if isinstance(adv, (int, float)):
-                    df["Sales"] = adv + oth
-                else:
-                    df["Sales"] = adv.values + getattr(oth, "values", 0)
-        else:
-            # No Sales column at all: build it from best candidate
-            alt = [
-                c
-                for c in df.columns
-                if "sales" in c.lower()
-                and "total" in c.lower()
-                and "7 day" in c.lower()
-            ]
-            if alt:
-                df["Sales"] = df[alt[0]]
-            elif "Sales_Advertised" in df.columns or "Sales_Other" in df.columns:
-                adv = df["Sales_Advertised"] if "Sales_Advertised" in df.columns else 0
-                oth = df["Sales_Other"] if "Sales_Other" in df.columns else 0
-                df["Sales"] = adv + oth
-            else:
-                df["Sales"] = 0
-
-        # CPC from Spend/Clicks when missing
-        df["Cpc_Calculated"] = df.apply(
-            lambda x: safe_float(x.get("Spend", 0))
-            / safe_float(x.get("Clicks", 1))
-            if safe_float(x.get("Clicks", 0)) > 0
-            else 0,
-            axis=1,
-        )
-        df["CPC"] = df.apply(
-            lambda x: safe_float(x.get("CPC", 0))
-            if safe_float(x.get("CPC", 0)) > 0
-            else safe_float(x.get("Cpc_Calculated", 0)),
-            axis=1,
-        )
-
-        # keep active rows
-        df = df[(df["Spend"] > 0) | (df["Clicks"] > 0)].copy()
+        # drop fully empty rows
+        df = df.dropna(how="all")
         if len(df) == 0:
-            raise ValueError("No valid data after filtering")
+            raise ValueError("No usable rows in the file")
 
-        # derived metrics
-        df["Profit"] = df["Sales"] - df["Spend"]
-        df["Wastage"] = df.apply(
-            lambda x: safe_float(x.get("Spend", 0))
-            if safe_float(x.get("Sales", 0)) == 0
-            else 0,
-            axis=1,
-        )
-        df["CVR"] = df.apply(
-            lambda x: (
-                safe_float(x.get("Orders", 0)) / safe_float(x.get("Clicks", 1)) * 100
+        # Build column lookup in lowercase
+        cols_lower = [c.lower().strip() for c in df.columns]
+        col_map = {c.lower().strip(): c for c in df.columns}
+
+        # Required base fields (flexible)
+        cst = pick_best_column(cols_lower, [r"^customer search term$", r"customer search term", r"search term"])
+        camp = pick_best_column(cols_lower, [r"^campaign name$", r"campaign name"])
+        clicks = pick_best_column(cols_lower, [r"^clicks$", r"clicks"])
+        spend = pick_best_column(cols_lower, [r"^spend$", r"\bcost\b", r"ad spend", r"spend"])
+        impr = pick_best_column(cols_lower, [r"^impressions$", r"impressions", r"\bimps\b"])
+
+        if not cst or not camp or not clicks or not spend:
+            raise ValueError(
+                "Required columns not found. Need: Customer Search Term, Campaign Name, Spend/Cost, Clicks."
             )
-            if safe_float(x.get("Clicks", 0)) > 0
-            else 0,
-            axis=1,
+
+        # Sales column detection (7/14/30 day, currency variations)
+        sales_col_l = pick_best_column(
+            cols_lower,
+            [
+                r"\b7\s*day\s*total\s*sales\b",
+                r"\b14\s*day\s*total\s*sales\b",
+                r"\b30\s*day\s*total\s*sales\b",
+                r"\btotal\s*sales\b",
+                r"(^sales$)|(\bsales\b)",
+                r"\brevenue\b",
+            ],
         )
-        df["ROAS"] = df.apply(
-            lambda x: (
-                safe_float(x.get("Sales", 0)) / safe_float(x.get("Spend", 1))
-            )
-            if safe_float(x.get("Spend", 0)) > 0
-            else 0,
-            axis=1,
+
+        # Orders column detection (7/14/30 day, units/orders variations)
+        orders_col_l = pick_best_column(
+            cols_lower,
+            [
+                r"\b7\s*day\s*total\s*orders\b",
+                r"\b14\s*day\s*total\s*orders\b",
+                r"\b30\s*day\s*total\s*orders\b",
+                r"\bordered\s*units\b",
+                r"\btotal\s*orders\b",
+                r"(^orders$)|(\borders\b)",
+                r"\bunits\b",
+            ],
         )
-        df["ACOS"] = df.apply(
-            lambda x: (
-                safe_float(x.get("Spend", 0)) / safe_float(x.get("Sales", 1)) * 100
-            )
-            if safe_float(x.get("Sales", 0)) > 0
-            else 0,
-            axis=1,
+
+        # Extra fallback sales split columns
+        adv_sales_l = pick_best_column(cols_lower, [r"advertised\s*sku\s*sales"])
+        other_sales_l = pick_best_column(cols_lower, [r"other\s*sku\s*sales"])
+
+        # Optional columns
+        adgroup_l = pick_best_column(cols_lower, [r"ad group name", r"adgroup"])
+        match_l = pick_best_column(cols_lower, [r"match type", r"matchtype"])
+        cpc_l = pick_best_column(cols_lower, [r"cost per click", r"\bcpc\b"])
+
+        # Build normalized dataframe
+        out = pd.DataFrame()
+        out["Customer Search Term"] = df[col_map[cst]].astype(str).fillna("").str.strip()
+        out["Campaign Name"] = df[col_map[camp]].astype(str).fillna("").str.strip()
+        out["Ad Group Name"] = df[col_map[adgroup_l]].astype(str).fillna("N/A").str.strip() if adgroup_l else "N/A"
+        out["Match Type"] = df[col_map[match_l]].astype(str).fillna("N/A").str.strip() if match_l else "N/A"
+
+        out["Clicks"] = to_numeric_series(df[col_map[clicks]])
+        out["Spend"] = to_numeric_series(df[col_map[spend]])
+        out["Impressions"] = to_numeric_series(df[col_map[impr]]) if impr else 0.0
+
+        self.clicks_source = col_map[clicks]
+        self.spend_source = col_map[spend]
+        self.impr_source = col_map[impr] if impr else ""
+
+        # Sales
+        if sales_col_l:
+            out["Sales"] = to_numeric_series(df[col_map[sales_col_l]])
+            self.sales_source = col_map[sales_col_l]
+        else:
+            out["Sales"] = 0.0
+            self.sales_source = ""
+
+        # Orders
+        if orders_col_l:
+            out["Orders"] = to_numeric_series(df[col_map[orders_col_l]])
+            self.orders_source = col_map[orders_col_l]
+        else:
+            out["Orders"] = 0.0
+            self.orders_source = ""
+
+        # Fallback: if Sales is still zero but we have adv/other sales, rebuild
+        if out["Sales"].sum() == 0 and (adv_sales_l or other_sales_l):
+            adv = to_numeric_series(df[col_map[adv_sales_l]]) if adv_sales_l else 0.0
+            oth = to_numeric_series(df[col_map[other_sales_l]]) if other_sales_l else 0.0
+            out["Sales"] = adv + oth
+            self.sales_source = "Advertised SKU Sales + Other SKU Sales"
+
+        # CPC: use file CPC if present; else calculate
+        if cpc_l:
+            out["CPC"] = to_numeric_series(df[col_map[cpc_l]])
+        else:
+            out["CPC"] = 0.0
+
+        out["CPC"] = out.apply(
+            lambda r: float(r["CPC"]) if float(r["CPC"]) > 0 else (float(r["Spend"]) / float(r["Clicks"]) if float(r["Clicks"]) > 0 else 0.0),
+            axis=1
         )
-        df["CTR"] = df.apply(
-            lambda x: (
-                safe_float(x.get("Clicks", 0))
-                / safe_float(x.get("Impressions", 1))
-                * 100
-            )
-            if safe_float(x.get("Impressions", 0)) > 0
-            else 0,
-            axis=1,
-        )
-        df["CPA"] = df.apply(
-            lambda x: (
-                safe_float(x.get("Spend", 0)) / safe_float(x.get("Orders", 1))
-            )
-            if safe_float(x.get("Orders", 0)) > 0
-            else 0,
-            axis=1,
-        )
-        df["TCoAS"] = df["ACOS"]
-        df["Negative_Type"] = df["Customer Search Term"].apply(get_negative_type)
-        df["Client"] = self.client_name
-        df["Processed_Date"] = datetime.now()
 
-        return df
+        # Keep active rows
+        out = out[(out["Spend"] > 0) | (out["Clicks"] > 0)].copy()
+        if len(out) == 0:
+            raise ValueError("No valid rows after filtering (Spend/Clicks are all 0)")
 
-    # ------------------------------------------------------------------ #
-    # Summary & health
-    # ------------------------------------------------------------------ #
-    def _empty_summary(self) -> Dict[str, float]:
-        return {
-            k: 0
-            for k in [
-                "total_spend",
-                "total_sales",
-                "total_profit",
-                "total_orders",
-                "total_clicks",
-                "total_impressions",
-                "total_wastage",
-                "roas",
-                "acos",
-                "tcoas",
-                "avg_cpc",
-                "avg_ctr",
-                "avg_cvr",
-                "avg_cpa",
-                "conversion_rate",
-                "keywords_count",
-                "campaigns_count",
-                "ad_groups_count",
-            ]
-        }
+        # Derived metrics
+        out["Profit"] = out["Sales"] - out["Spend"]
+        out["Wastage"] = out.apply(lambda r: float(r["Spend"]) if float(r["Sales"]) == 0 else 0.0, axis=1)
+        out["CVR"] = out.apply(lambda r: (float(r["Orders"]) / float(r["Clicks"]) * 100) if float(r["Clicks"]) > 0 else 0.0, axis=1)
+        out["ROAS"] = out.apply(lambda r: (float(r["Sales"]) / float(r["Spend"])) if float(r["Spend"]) > 0 else 0.0, axis=1)
+        out["ACOS"] = out.apply(lambda r: (float(r["Spend"]) / float(r["Sales"]) * 100) if float(r["Sales"]) > 0 else 0.0, axis=1)
+        out["CTR"] = out.apply(lambda r: (float(r["Clicks"]) / float(r["Impressions"]) * 100) if float(r["Impressions"]) > 0 else 0.0, axis=1)
+        out["CPA"] = out.apply(lambda r: (float(r["Spend"]) / float(r["Orders"])) if float(r["Orders"]) > 0 else 0.0, axis=1)
+        out["TCoAS"] = out["ACOS"]
 
-    def get_client_summary(self) -> Dict[str, float]:
-        try:
-            if self.df is None or len(self.df) == 0:
-                return self._empty_summary()
+        out["Negative_Type"] = out["Customer Search Term"].apply(get_negative_type)
+        out["Client"] = self.client_name
+        out["Processed_Date"] = datetime.now()
 
-            ts = safe_float(self.df["Spend"].sum())
-            tsa = safe_float(self.df["Sales"].sum())
-            to = safe_int(self.df["Orders"].sum())
-            tc = safe_int(self.df["Clicks"].sum())
-            ti = safe_int(self.df["Impressions"].sum())
-            tw = safe_float(self.df["Wastage"].sum())
-            tp = safe_float(self.df["Profit"].sum())
+        return out
 
-            avg_cpc = 0.0
-            if "CPC" in self.df.columns:
-                cpc_values = self.df[self.df["CPC"] > 0]["CPC"]
-                if len(cpc_values) > 0:
-                    avg_cpc = safe_float(cpc_values.mean())
-            if avg_cpc == 0 and tc > 0:
-                avg_cpc = ts / tc
-
-            avg_ctr = safe_float(self.df["CTR"].mean())
-            avg_cvr = safe_float(self.df["CVR"].mean())
-            avg_cpa = ts / to if to > 0 else 0
-            avg_acos = ts / tsa * 100 if tsa > 0 else 0
-            avg_roas = tsa / ts if ts > 0 else 0
-
+    def summary(self) -> Dict[str, float]:
+        if self.df is None or len(self.df) == 0:
             return {
-                "total_spend": ts,
-                "total_sales": tsa,
-                "total_profit": tp,
-                "total_orders": to,
-                "total_clicks": tc,
-                "total_impressions": ti,
-                "total_wastage": tw,
-                "roas": avg_roas,
-                "acos": avg_acos,
-                "tcoas": avg_acos,
-                "avg_cpc": avg_cpc,
-                "avg_ctr": avg_ctr,
-                "avg_cvr": avg_cvr,
-                "avg_cpa": avg_cpa,
-                "conversion_rate": to / tc * 100 if tc > 0 else 0,
-                "keywords_count": len(self.df),
-                "campaigns_count": safe_int(self.df["Campaign Name"].nunique()),
-                "ad_groups_count": safe_int(
-                    self.df["Ad Group Name"].nunique()
-                )
-                if "Ad Group Name" in self.df.columns
-                else 0,
+                "spend": 0, "sales": 0, "orders": 0, "clicks": 0, "impr": 0,
+                "wastage": 0, "roas": 0, "acos": 0, "tcoas": 0,
+                "avg_cpc": 0, "avg_ctr": 0, "avg_cvr": 0, "avg_cpa": 0,
             }
-        except Exception as e:
-            st.error(f"Summary error: {e}")
-            return self._empty_summary()
 
-    def get_health_score(self) -> int:
-        try:
-            s = self.get_client_summary()
-            score = 0
+        ts = float(self.df["Spend"].sum())
+        sa = float(self.df["Sales"].sum())
+        od = float(self.df["Orders"].sum())
+        ck = float(self.df["Clicks"].sum())
+        im = float(self.df["Impressions"].sum()) if "Impressions" in self.df.columns else 0.0
+        wa = float(self.df["Wastage"].sum())
 
-            r = s["roas"]
-            if r >= 4.0:
-                score += 40
-            elif r >= 3.0:
-                score += 35
-            elif r >= 2.5:
-                score += 30
-            elif r >= 2.0:
-                score += 25
-            elif r >= 1.5:
-                score += 15
-            elif r > 0:
-                score += 5
+        roas = sa / ts if ts > 0 else 0.0
+        acos = ts / sa * 100 if sa > 0 else 0.0
+        avg_cpc = (ts / ck) if ck > 0 else 0.0
+        avg_ctr = float(self.df["CTR"].mean()) if len(self.df) else 0.0
+        avg_cvr = float(self.df["CVR"].mean()) if len(self.df) else 0.0
+        avg_cpa = (ts / od) if od > 0 else 0.0
 
-            wp = s["total_wastage"] / s["total_spend"] * 100 if s["total_spend"] > 0 else 0
-            if wp <= 5:
-                score += 25
-            elif wp <= 15:
-                score += 20
-            elif wp <= 25:
-                score += 15
-            elif wp <= 35:
-                score += 10
+        return {
+            "spend": ts,
+            "sales": sa,
+            "orders": od,
+            "clicks": ck,
+            "impr": im,
+            "wastage": wa,
+            "roas": roas,
+            "acos": acos,
+            "tcoas": acos,
+            "avg_cpc": avg_cpc,
+            "avg_ctr": avg_ctr,
+            "avg_cvr": avg_cvr,
+            "avg_cpa": avg_cpa,
+        }
+
+    def classify_keywords(self) -> Dict[str, List[Dict]]:
+        cats = {"scale": [], "test": [], "watch": [], "reduce": [], "pause": []}
+        if self.df is None or len(self.df) == 0:
+            return cats
+
+        for _, r in self.df.iterrows():
+            sp = float(r["Spend"])
+            sa = float(r["Sales"])
+            ro = float(r["ROAS"])
+            o = int(r["Orders"])
+            c = int(r["Clicks"])
+            cv = float(r["CVR"])
+            cpc = float(r["CPC"])
+
+            item = {
+                "Keyword": safe_str(r["Customer Search Term"]),
+                "Campaign": safe_str(r["Campaign Name"]),
+                "Ad Group": safe_str(r["Ad Group Name"]),
+                "Match Type": safe_str(r["Match Type"]),
+                "Spend": format_currency(sp),
+                "Sales": format_currency(sa),
+                "Orders": o,
+                "Clicks": c,
+                "ROAS": f"{ro:.2f}x",
+                "CVR": f"{cv:.2f}%",
+                "CPC": format_currency(cpc),
+                "Reason": "",
+            }
+
+            if sp >= 20 and o >= 1 and ro >= 2.5:
+                item["Reason"] = "Winner (scale +15–25%)."
+                cats["scale"].append(item)
+            elif sp >= 50 and sa == 0 and c >= 3:
+                item["Reason"] = "Spent high, zero sales (pause/negative)."
+                cats["pause"].append(item)
+            elif sp >= 30 and ro < 1.0 and c >= 5:
+                item["Reason"] = "Low ROAS (reduce ~30%)."
+                cats["reduce"].append(item)
+            elif sp >= 20 and 1.5 <= ro < 2.5 and c >= 3:
+                item["Reason"] = "Good potential (test +10–15%)."
+                cats["test"].append(item)
             else:
-                score += 5
+                item["Reason"] = "Collect more data (watch)."
+                cats["watch"].append(item)
 
-            ctr = s["avg_ctr"]
-            if ctr >= 5:
-                score += 20
-            elif ctr >= 3:
-                score += 15
-            elif ctr >= 1.5:
-                score += 10
-            elif ctr >= 0.5:
-                score += 5
+        return cats
 
-            cvr = s["avg_cvr"]
-            if cvr >= 10:
-                score += 15
-            elif cvr >= 5:
-                score += 10
-            elif cvr >= 2:
-                score += 5
-
-            return int(min(score, 100))
-        except Exception:
-            return 0
-
-    # ------------------------------------------------------------------ #
-    # Insights & placement recommendations
-    # ------------------------------------------------------------------ #
-    def get_performance_insights(self) -> Dict:
-        s = self.get_client_summary()
-        insights = {
-            "ctr_insights": [],
-            "cvr_insights": [],
-            "roas_insights": [],
-            "acos_insights": [],
-            "cpa_insights": [],
-            "tcoas_insights": [],
-            "content_suggestions": [],
-        }
-
-        try:
-            avg_ctr = s["avg_ctr"]
-            if avg_ctr < 0.3:
-                insights["ctr_insights"].append(
-                    {
-                        "level": "critical",
-                        "metric": "CTR",
-                        "value": f"{avg_ctr:.2f}%",
-                        "issue": "Extremely low CTR",
-                        "action": "Revamp creatives and targeting",
-                    }
-                )
-                insights["content_suggestions"].extend(
-                    [
-                        'Add power words: "Best", "Top-Rated", "Premium"',
-                        'Show pricing: "Under ₹999", "Free Shipping"',
-                        "Use high‑res lifestyle images",
-                    ]
-                )
-            elif avg_ctr < 0.8:
-                insights["ctr_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "CTR",
-                        "value": f"{avg_ctr:.2f}%",
-                        "issue": "CTR below normal (1–2%)",
-                        "action": "Test new titles and main images",
-                    }
-                )
-            elif avg_ctr >= 2.0:
-                insights["ctr_insights"].append(
-                    {
-                        "level": "success",
-                        "metric": "CTR",
-                        "value": f"{avg_ctr:.2f}%",
-                        "issue": "Strong CTR",
-                        "action": "Scale winning campaigns",
-                    }
-                )
-
-            avg_cvr = s["avg_cvr"]
-            if avg_cvr < 1.0:
-                insights["cvr_insights"].append(
-                    {
-                        "level": "critical",
-                        "metric": "CVR",
-                        "value": f"{avg_cvr:.2f}%",
-                        "issue": "Very low conversion rate",
-                        "action": "Fix pricing, listing, or audience",
-                    }
-                )
-            elif avg_cvr < 3.0:
-                insights["cvr_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "CVR",
-                        "value": f"{avg_cvr:.2f}%",
-                        "issue": "Below average conversion",
-                        "action": "Improve images and A+ content",
-                    }
-                )
-
-            roas = s["roas"]
-            if roas < 1.0:
-                insights["roas_insights"].append(
-                    {
-                        "level": "critical",
-                        "metric": "ROAS",
-                        "value": f"{roas:.2f}x",
-                        "issue": "Losing money",
-                        "action": "Pause or heavily cut bids",
-                    }
-                )
-            elif roas < 2.0:
-                insights["roas_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "ROAS",
-                        "value": f"{roas:.2f}x",
-                        "issue": "Weak profit",
-                        "action": "Reduce bids and add negatives",
-                    }
-                )
-            elif roas >= 3.0:
-                insights["roas_insights"].append(
-                    {
-                        "level": "success",
-                        "metric": "ROAS",
-                        "value": f"{roas:.2f}x",
-                        "issue": "Good profitability",
-                        "action": "Scale winners",
-                    }
-                )
-
-            acos = s["acos"]
-            target_acos = self.target_acos or 30
-            if acos > target_acos * 1.5:
-                insights["acos_insights"].append(
-                    {
-                        "level": "critical",
-                        "metric": "ACOS",
-                        "value": f"{acos:.1f}%",
-                        "issue": "ACOS far above target",
-                        "action": "Cut bids, pause waste, tighten targeting",
-                    }
-                )
-            elif acos > target_acos:
-                insights["acos_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "ACOS",
-                        "value": f"{acos:.1f}%",
-                        "issue": "ACOS slightly above target",
-                        "action": "Gradually reduce bids on poor performers",
-                    }
-                )
-
-            avg_cpa = s["avg_cpa"]
-            if self.target_cpa and avg_cpa > self.target_cpa:
-                insights["cpa_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "CPA",
-                        "value": format_currency(avg_cpa),
-                        "issue": f"CPA above target {format_currency(self.target_cpa)}",
-                        "action": "Lower bids or improve CVR",
-                    }
-                )
-
-            tcoas = s["tcoas"]
-            if self.target_tcoas and tcoas > self.target_tcoas:
-                insights["tcoas_insights"].append(
-                    {
-                        "level": "warning",
-                        "metric": "TCoAS",
-                        "value": f"{tcoas:.1f}%",
-                        "issue": f"TCoAS above target {self.target_tcoas:.1f}%",
-                        "action": "Increase organic sales or trim ad spend",
-                    }
-                )
-
-            return insights
-        except Exception as e:
-            st.error(f"Insights error: {e}")
-            return insights
-
-    def get_placement_recommendations(self) -> Dict:
-        res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
-        try:
-            if self.df is None or len(self.df) == 0:
-                res["message"] = "No data for placements."
-                return res
-
-            placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
-            if not placement_cols:
-                res["message"] = (
-                    "Current report has no placement column. "
-                    "Use a placement/campaign report for placement-wise tips."
-                )
-                return res
-
-            col = placement_cols[0]
-            dfp = self.df.copy()
-            dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
-
-            g = dfp.groupby(col).agg(
-                {
-                    "Spend": "sum",
-                    "Sales": "sum",
-                    "Orders": "sum",
-                    "Clicks": "sum",
-                    "Impressions": "sum",
-                }
-            )
-            g["ROAS"] = g.apply(
-                lambda x: safe_float(x["Sales"]) / safe_float(x["Spend"])
-                if safe_float(x["Spend"]) > 0
-                else 0,
-                axis=1,
-            )
-            g["ACOS"] = g.apply(
-                lambda x: safe_float(x["Spend"]) / safe_float(x["Sales"]) * 100
-                if safe_float(x["Sales"]) > 0
-                else 0,
-                axis=1,
-            )
-            g["CVR"] = g.apply(
-                lambda x: safe_float(x["Orders"]) / safe_float(x["Clicks"]) * 100
-                if safe_float(x["Clicks"]) > 0
-                else 0,
-                axis=1,
-            )
-            g["CTR"] = g.apply(
-                lambda x: safe_float(x["Clicks"]) / safe_float(x["Impressions"]) * 100
-                if safe_float(x["Impressions"]) > 0
-                else 0,
-                axis=1,
-            )
-
-            g_reset = g.reset_index().rename(columns={col: "Placement"})
-            res["table"] = g_reset
-            res["available"] = True
-
-            ta = self.target_acos or 30
-            tr = self.target_roas or 3.0
-
-            recs = []
-            for _, r in g_reset.iterrows():
-                name = safe_str(r["Placement"])
-                ro = safe_float(r["ROAS"])
-                ac = safe_float(r["ACOS"])
-                sp = safe_float(r["Spend"])
-
-                if sp < 1:
-                    continue
-
-                if ro >= tr or ac <= ta:
-                    recs.append(
-                        {
-                            "Placement": name,
-                            "Action": "INCREASE",
-                            "Recommendation": f"Strong performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% placement bid.",
-                        }
-                    )
-                elif ro < 1.0 or ac > ta * 1.5:
-                    recs.append(
-                        {
-                            "Placement": name,
-                            "Action": "REDUCE",
-                            "Recommendation": f"Weak performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce placement bid by 15–30% or pause.",
-                        }
-                    )
-                else:
-                    recs.append(
-                        {
-                            "Placement": name,
-                            "Action": "HOLD",
-                            "Recommendation": f"Average performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Keep bids stable and monitor.",
-                        }
-                    )
-
-            res["recs"] = recs
-            return res
-        except Exception as e:
-            res["message"] = f"Error while building placement view: {e}"
-            return res
-
-    # ------------------------------------------------------------------ #
-    # Classification & bids
-    # ------------------------------------------------------------------ #
-    def classify_keywords_improved(self) -> Dict[str, List[Dict]]:
-        cats = {
-            "high_potential": [],
-            "low_potential": [],
-            "wastage": [],
-            "opportunities": [],
-            "future_watch": [],
-        }
-        try:
-            if self.df is None or len(self.df) == 0:
-                return cats
-
-            for _, r in self.df.iterrows():
-                try:
-                    sp = safe_float(r.get("Spend", 0))
-                    sa = safe_float(r.get("Sales", 0))
-                    ro = safe_float(r.get("ROAS", 0))
-                    o = safe_int(r.get("Orders", 0))
-                    c = safe_int(r.get("Clicks", 0))
-                    cv = safe_float(r.get("CVR", 0))
-                    kw = safe_str(r.get("Customer Search Term"))
-                    camp = safe_str(r.get("Campaign Name"))
-                    mt = safe_str(r.get("Match Type"))
-                    cpc = safe_float(r.get("CPC", 0))
-
-                    if sp <= 0 and c <= 0:
-                        continue
-
-                    kd = {
-                        "Keyword": kw,
-                        "Spend": format_currency(sp),
-                        "Sales": format_currency(sa),
-                        "ROAS": f"{ro:.2f}x",
-                        "Orders": o,
-                        "Clicks": c,
-                        "CVR": f"{cv:.2f}%",
-                        "CPC": format_currency(cpc),
-                        "Campaign": camp,
-                        "Match Type": mt,
-                        "Reason": "",
-                    }
-
-                    if ro >= 2.5 and o >= 1 and sp >= 20:
-                        kd["Reason"] = f"Champion! ROAS {ro:.2f}x, {o} orders"
-                        cats["high_potential"].append(kd)
-                    elif sp >= 50 and sa == 0 and c >= 3:
-                        kd["Reason"] = f"₹{sp:.0f} spent, ZERO sales - PAUSE"
-                        cats["wastage"].append(kd)
-                    elif sp >= 30 and ro < 1.0 and c >= 5:
-                        kd["Reason"] = f"Poor ROAS {ro:.2f}x - reduce 30%"
-                        cats["low_potential"].append(kd)
-                    elif sp >= 20 and 1.5 <= ro < 2.5 and c >= 3:
-                        kd["Reason"] = f"Good potential ROAS {ro:.2f}x - test +10-15%"
-                        cats["opportunities"].append(kd)
-                    elif c >= 3 and sp < 50 and sa == 0:
-                        kd["Reason"] = f"{c} clicks, ₹{sp:.0f} - gather more data"
-                        cats["future_watch"].append(kd)
-                except Exception:
-                    continue
-
-            return cats
-        except Exception as e:
-            st.error(f"Classify error: {e}")
-            return cats
-
-    def get_bid_suggestions_improved(self) -> List[Dict]:
-        sug: List[Dict] = []
-        try:
-            if self.df is None:
-                return sug
-
-            ta = self.target_acos or 30.0
-            tr = self.target_roas or 3.0
-
-            for _, r in self.df.iterrows():
-                try:
-                    sp = safe_float(r.get("Spend", 0))
-                    sa = safe_float(r.get("Sales", 0))
-                    ro = safe_float(r.get("ROAS", 0))
-                    o = safe_int(r.get("Orders", 0))
-                    c = safe_int(r.get("Clicks", 0))
-                    cv = safe_float(r.get("CVR", 0))
-                    cpc = safe_float(r.get("CPC", 0))
-
-                    if sp < 20 or c < 3 or cpc <= 0:
-                        continue
-
-                    s = {
-                        "Keyword": safe_str(r.get("Customer Search Term")),
-                        "Campaign": safe_str(r.get("Campaign Name")),
-                        "Ad Group": safe_str(r.get("Ad Group Name")),
-                        "Match Type": safe_str(r.get("Match Type")),
-                        "Current CPC": format_currency(cpc),
-                        "Spend": format_currency(sp),
-                        "Sales": format_currency(sa),
-                        "ROAS": f"{ro:.2f}x",
-                        "CVR": f"{cv:.2f}%",
-                        "Orders": o,
-                        "Action": "",
-                        "Suggested Bid": "",
-                        "Change (%)": 0,
-                        "Reason": "",
-                    }
-
-                    ac = sp / sa * 100 if sa > 0 else 999
-
-                    if ro >= 3.0 and cv >= 2.0 and o >= 2:
-                        nb = cpc * 1.25
-                        s.update(
-                            {
-                                "Action": "INCREASE",
-                                "Suggested Bid": format_currency(nb),
-                                "Change (%)": 25,
-                                "Reason": f"Champion keyword! ROAS {ro:.2f}x",
-                            }
-                        )
-                        sug.append(s)
-                    elif ro >= tr and cv >= 1.0 and o >= 1:
-                        nb = cpc * 1.15
-                        s.update(
-                            {
-                                "Action": "INCREASE",
-                                "Suggested Bid": format_currency(nb),
-                                "Change (%)": 15,
-                                "Reason": "Above target ROAS",
-                            }
-                        )
-                        sug.append(s)
-                    elif sa == 0 and sp >= 50:
-                        s.update(
-                            {
-                                "Action": "PAUSE",
-                                "Suggested Bid": "₹0.00",
-                                "Change (%)": -100,
-                                "Reason": f"₹{sp:.0f} wasted, no sales",
-                            }
-                        )
-                        sug.append(s)
-                    elif ro < 1.5 and sp >= 30:
-                        nb = cpc * 0.7
-                        s.update(
-                            {
-                                "Action": "REDUCE",
-                                "Suggested Bid": format_currency(nb),
-                                "Change (%)": -30,
-                                "Reason": f"Poor ROAS {ro:.2f}x",
-                            }
-                        )
-                        sug.append(s)
-                    elif ac > ta and sp >= 30:
-                        red = min(30, (ac - ta) / ta * 100)
-                        nb = cpc * (1 - red / 100)
-                        s.update(
-                            {
-                                "Action": "REDUCE",
-                                "Suggested Bid": format_currency(nb),
-                                "Change (%)": int(-red),
-                                "Reason": f"ACOS {ac:.1f}% above target {ta:.1f}%",
-                            }
-                        )
-                        sug.append(s)
-                except Exception:
-                    continue
-
-            return sorted(
-                sug,
-                key=lambda x: safe_float(
-                    x["Spend"]
-                    .replace("₹", "")
-                    .replace(",", "")
-                    .replace("L", "")
-                    .replace("Cr", "")
-                ),
-                reverse=True,
-            )
-        except Exception:
+    def bid_suggestions(self) -> List[Dict]:
+        if self.df is None or len(self.df) == 0:
             return []
 
-    # ------------------------------------------------------------------ #
-    # Amazon BULK file builder for bids
-    # ------------------------------------------------------------------ #
-    def build_amazon_bulk_from_bids(self, bid_suggestions: List[Dict]) -> pd.DataFrame:
-        rows: List[Dict] = []
-        for s in bid_suggestions:
-            try:
-                campaign = safe_str(s.get("Campaign"))
-                ad_group = safe_str(s.get("Ad Group"))
-                keyword = safe_str(s.get("Keyword"))
-                match_type = safe_str(s.get("Match Type"))
-                action = safe_str(s.get("Action")).upper()
-                bid_val = safe_float(s.get("Suggested Bid", 0))
+        target_roas = self.target_roas or 3.0
+        target_acos = self.target_acos or 30.0
 
-                if not campaign or not ad_group or not keyword:
-                    continue
+        suggestions = []
+        for _, r in self.df.iterrows():
+            sp = float(r["Spend"])
+            sa = float(r["Sales"])
+            ro = float(r["ROAS"])
+            o = int(r["Orders"])
+            c = int(r["Clicks"])
+            cpc = float(r["CPC"])
+            cv = float(r["CVR"])
 
-                row = {
-                    "Record Type": "Keyword",
-                    "Campaign Name": campaign,
-                    "Ad Group Name": ad_group,
-                    "Keyword or Product Targeting": keyword,
-                    "Match Type": match_type.title() if match_type else "",
-                    "Bid": bid_val if bid_val > 0 else "",
-                    "State": "enabled",
-                    "Operation": "update",
-                }
-
-                if action == "PAUSE":
-                    row["State"] = "paused"
-                    row["Bid"] = ""
-
-                rows.append(row)
-            except Exception:
+            if sp < 20 or c < 3 or cpc <= 0:
                 continue
+
+            acos = (sp / sa * 100) if sa > 0 else 999.0
+            action = ""
+            change = 0
+            new_bid = cpc
+            reason = ""
+
+            if sa == 0 and sp >= 50:
+                action = "PAUSE"
+                change = -100
+                new_bid = 0
+                reason = "High spend, zero sales."
+            elif ro >= target_roas and o >= 1 and cv >= 1.0:
+                action = "INCREASE"
+                change = 15
+                new_bid = cpc * 1.15
+                reason = "Above target ROAS."
+            elif ro >= 3.0 and o >= 2 and cv >= 2.0:
+                action = "INCREASE"
+                change = 25
+                new_bid = cpc * 1.25
+                reason = "Strong performance."
+            elif ro < 1.5 and sp >= 30:
+                action = "REDUCE"
+                change = -30
+                new_bid = cpc * 0.70
+                reason = "Low ROAS."
+            elif acos > target_acos and sp >= 30:
+                action = "REDUCE"
+                red = min(30, (acos - target_acos) / target_acos * 100)
+                change = int(-red)
+                new_bid = cpc * (1 - red / 100)
+                reason = f"ACOS {acos:.1f}% above target."
+
+            if action:
+                suggestions.append(
+                    {
+                        "Keyword": safe_str(r["Customer Search Term"]),
+                        "Campaign": safe_str(r["Campaign Name"]),
+                        "Ad Group": safe_str(r["Ad Group Name"]),
+                        "Match Type": safe_str(r["Match Type"]),
+                        "Spend": format_currency(sp),
+                        "Sales": format_currency(sa),
+                        "Orders": o,
+                        "ROAS": f"{ro:.2f}x",
+                        "CVR": f"{cv:.2f}%",
+                        "Current CPC": format_currency(cpc),
+                        "Action": action,
+                        "Change (%)": change,
+                        "Suggested Bid": format_currency(new_bid) if new_bid > 0 else "₹0.00",
+                        "Reason": reason,
+                    }
+                )
+
+        return suggestions
+
+    def build_amazon_bulk_from_bids(self, bid_suggestions: List[Dict]) -> pd.DataFrame:
+        rows = []
+        for s in bid_suggestions:
+            campaign = safe_str(s.get("Campaign"), "")
+            ad_group = safe_str(s.get("Ad Group"), "")
+            keyword = safe_str(s.get("Keyword"), "")
+            match_type = safe_str(s.get("Match Type"), "")
+            action = safe_str(s.get("Action"), "").upper()
+
+            bid_val = parse_number(s.get("Suggested Bid", 0), 0.0)
+            if bid_val <= 0:
+                # suggested bid could be '₹0.00' -> becomes 0
+                bid_val = 0.0
+
+            if not campaign or not ad_group or not keyword:
+                continue
+
+            row = {
+                "Record Type": "Keyword",
+                "Campaign Name": campaign,
+                "Ad Group Name": ad_group,
+                "Keyword or Product Targeting": keyword,
+                "Match Type": match_type.title() if match_type else "",
+                "Bid": bid_val if bid_val > 0 else "",
+                "State": "enabled",
+                "Operation": "update",
+            }
+            if action == "PAUSE":
+                row["State"] = "paused"
+                row["Bid"] = ""
+            rows.append(row)
 
         return pd.DataFrame(rows)
 
-    # ------------------------------------------------------------------ #
-    # Report
-    # ------------------------------------------------------------------ #
-    def generate_client_report(self) -> str:
-        try:
-            s = self.get_client_summary()
-            h = self.get_health_score()
-            c = self.classify_keywords_improved()
-            hs = "EXCELLENT" if h >= 70 else "GOOD" if h >= 50 else "NEEDS ATTENTION"
+    def placement_recommendations(self) -> Dict:
+        res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
+        if self.df is None or len(self.df) == 0:
+            res["message"] = "No data."
+            return res
 
-            tas = f"{self.target_acos:.1f}%" if self.target_acos else "Not Set (30% default)"
-            trs = f"{self.target_roas:.1f}x" if self.target_roas else "Not Set (3.0x default)"
-            tcpa = format_currency(self.target_cpa) if self.target_cpa else "Not Set"
-            ttcoas = (
-                f"{self.target_tcoas:.1f}%" if self.target_tcoas else "Not Set"
-            )
+        placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
+        if not placement_cols:
+            res["message"] = "No placement column found in this report."
+            return res
 
-            return f"""
-===============================================================================
-AMAZON PPC PERFORMANCE REPORT
-Client: {self.client_name}
-Date: {datetime.now().strftime('%B %d, %Y')}
-===============================================================================
+        col = placement_cols[0]
+        dfp = self.df.copy()
+        dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
 
-OVERALL HEALTH: {h}/100 - {hs}
+        g = dfp.groupby(col).agg(
+            Spend=("Spend", "sum"),
+            Sales=("Sales", "sum"),
+            Orders=("Orders", "sum"),
+            Clicks=("Clicks", "sum"),
+            Impressions=("Impressions", "sum"),
+        ).reset_index().rename(columns={col: "Placement"})
 
-TARGETS
--------
-ACOS : {tas}
-ROAS : {trs}
-CPA  : {tcpa}
-TCoAS: {ttcoas}
+        g["ROAS"] = g.apply(lambda r: (r["Sales"] / r["Spend"]) if r["Spend"] > 0 else 0.0, axis=1)
+        g["ACOS"] = g.apply(lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0, axis=1)
+        g["CVR"] = g.apply(lambda r: (r["Orders"] / r["Clicks"] * 100) if r["Clicks"] > 0 else 0.0, axis=1)
+        g["CTR"] = g.apply(lambda r: (r["Clicks"] / r["Impressions"] * 100) if r["Impressions"] > 0 else 0.0, axis=1)
 
-FINANCIAL
----------
-Spend : {format_currency(s['total_spend'])}
-Sales : {format_currency(s['total_sales'])}
-Profit: {format_currency(s['total_profit'])}
-ROAS  : {s['roas']:.2f}x
-ACOS  : {s['acos']:.1f}%
-TCoAS : {s['tcoas']:.1f}%
+        ta = self.target_acos or 30.0
+        tr = self.target_roas or 3.0
 
-METRICS
--------
-Orders : {format_number(s['total_orders'])}
-Clicks : {format_number(s['total_clicks'])}
-Impr.  : {format_number(s['total_impressions'])}
-CVR    : {s['avg_cvr']:.2f}%
-CTR    : {s['avg_ctr']:.2f}%
-CPA    : {format_currency(s['avg_cpa'])}
-Avg CPC: {format_currency(s['avg_cpc'])}
+        recs = []
+        for _, r in g.iterrows():
+            sp = float(r["Spend"])
+            ro = float(r["ROAS"])
+            ac = float(r["ACOS"])
+            if sp <= 0:
+                continue
+            if ro >= tr or ac <= ta:
+                recs.append({"Placement": r["Placement"], "Action": "INCREASE", "Recommendation": f"Good placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% placement bid."})
+            elif ro < 1.0 or ac > ta * 1.5:
+                recs.append({"Placement": r["Placement"], "Action": "REDUCE", "Recommendation": f"Weak placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce by 15–30% or pause."})
+            else:
+                recs.append({"Placement": r["Placement"], "Action": "HOLD", "Recommendation": f"Average placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Keep stable and monitor."})
 
-KEYWORDS
---------
-Scale Now : {len(c['high_potential'])}
-Test      : {len(c['opportunities'])}
-Watch     : {len(c['future_watch'])}
-Reduce    : {len(c['low_potential'])}
-Pause     : {len(c['wastage'])}
+        res["available"] = True
+        res["table"] = g
+        res["recs"] = recs
+        return res
 
-===============================================================================
-Generated by Amazon Ads Dashboard Pro v7.1
-===============================================================================
-"""
-        except Exception as e:
-            return f"Error generating report: {e}"
 
 # -----------------------------------------------------------------------------
-# Session & layout helpers
+# App state
 # -----------------------------------------------------------------------------
-def init_session_state():
+class ClientData:
+    def __init__(self, name: str):
+        self.name = name
+        self.analyzer: Optional[CompleteAnalyzer] = None
+        self.target_acos: Optional[float] = None
+        self.target_roas: Optional[float] = None
+        self.target_cpa: Optional[float] = None
+        self.target_tcoas: Optional[float] = None
+
+
+def init_session():
+    if "agency_name" not in st.session_state:
+        st.session_state.agency_name = "Your Agency"
     if "clients" not in st.session_state:
         st.session_state.clients: Dict[str, ClientData] = {}
     if "active_client" not in st.session_state:
-        st.session_state.active_client: str | None = None
-    if "agency_name" not in st.session_state:
-        st.session_state.agency_name = "Your Agency"
+        st.session_state.active_client = None
+    if "debug" not in st.session_state:
+        st.session_state.debug = False
 
 
-def render_agency_header():
+def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.1</h1>
-            <p>Big-date search term reports supported • Sales & Orders fixed • Premium dark UI</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.2</h1>
+            <p>Sales/Orders fixed • Sheet auto-detect • Premium UI • Placement recommendations</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_sidebar():
+def show_df(df: pd.DataFrame, height: int = 420):
+    if df is None or len(df) == 0:
+        st.info("No rows to show.")
+        return
+    st.dataframe(add_serial_column(df), use_container_width=True, hide_index=True, height=height)
+
+
+# -----------------------------------------------------------------------------
+# Sidebar
+# -----------------------------------------------------------------------------
+def sidebar():
     with st.sidebar:
-        with st.expander("⚙️ Settings", expanded=True):
-            new_name = st.text_input(
-                "Agency name", value=st.session_state.agency_name
-            )
-            if new_name != st.session_state.agency_name:
-                st.session_state.agency_name = new_name
-                st.rerun()
+        st.session_state.agency_name = st.text_input("Agency name", st.session_state.agency_name)
+        st.session_state.debug = st.checkbox("Show diagnostics", value=st.session_state.debug)
 
         st.markdown("---")
         st.markdown("### 👥 Clients")
 
         if st.session_state.clients:
-            names = list(st.session_state.clients.keys())
-            sel = st.selectbox("Active client", names)
+            sel = st.selectbox("Active client", list(st.session_state.clients.keys()))
             st.session_state.active_client = sel
 
         st.markdown("---")
-        with st.expander("➕ Add client", expanded=False):
-            nm = st.text_input("Client name*", key="add_client_name")
-            ind = st.selectbox(
-                "Industry",
-                [
-                    "E-commerce",
-                    "Electronics",
-                    "Fashion",
-                    "Beauty",
-                    "Home",
-                    "Sports",
-                    "Books",
-                    "Health",
-                    "Other",
-                ],
-            )
-            bug = st.number_input(
-                "Monthly budget (₹)", value=50_000, step=5_000, min_value=0
-            )
-
-            st.info("🎯 Targets (optional; 0 = use smart defaults)")
-            c1, c2, c3, c4 = st.columns(4)
-
+        with st.expander("➕ Add client", expanded=True):
+            nm = st.text_input("Client name*")
+            c1, c2 = st.columns(2)
             with c1:
-                t_acos = st.number_input(
-                    "Target\nACOS %",
-                    value=0.0,
-                    step=5.0,
-                    format="%.1f",
-                    key="t_acos",
-                )
+                t_acos = st.number_input("Target ACOS %", value=0.0, step=5.0, format="%.1f")
+                t_roas = st.number_input("Target ROAS", value=0.0, step=0.5, format="%.1f")
             with c2:
-                t_roas = st.number_input(
-                    "Target\nROAS",
-                    value=0.0,
-                    step=0.5,
-                    format="%.1f",
-                    key="t_roas",
-                )
-            with c3:
-                t_cpa = st.number_input(
-                    "Target\nCPA ₹",
-                    value=0.0,
-                    step=50.0,
-                    format="%.0f",
-                    key="t_cpa",
-                )
-            with c4:
-                t_tcoas = st.number_input(
-                    "Target\nTCoAS %",
-                    value=0.0,
-                    step=5.0,
-                    format="%.1f",
-                    key="t_tcoas",
-                )
+                t_cpa = st.number_input("Target CPA ₹", value=0.0, step=50.0, format="%.0f")
+                t_tcoas = st.number_input("Target TCoAS %", value=0.0, step=5.0, format="%.1f")
 
-            em = st.text_input("Client email (optional)")
-            up = st.file_uploader(
-                "Upload Sponsored Products search term / placement report*",
-                type=["xlsx", "xls", "csv"],
-            )
+            up = st.file_uploader("Upload report (XLSX/CSV)*", type=["xlsx", "xls", "csv"])
 
-            if st.button("✅ Create client", use_container_width=True):
+            if st.button("✅ Create / Update client", use_container_width=True):
                 if not nm:
                     st.error("Enter client name.")
-                elif nm in st.session_state.clients:
-                    st.error("Client with this name already exists.")
-                elif not up:
+                    return
+                if not up:
                     st.error("Upload a report file.")
-                else:
-                    try:
-                        if up.name.lower().endswith(".csv"):
-                            df = pd.read_csv(up)
-                        else:
-                            df = pd.read_excel(up)
+                    return
 
-                        cd = ClientData(nm, ind, bug)
-                        cd.contact_email = em
-                        cd.target_acos = t_acos if t_acos > 0 else None
-                        cd.target_roas = t_roas if t_roas > 0 else None
-                        cd.target_cpa = t_cpa if t_cpa > 0 else None
-                        cd.target_tcoas = t_tcoas if t_tcoas > 0 else None
+                try:
+                    df = read_uploaded_report(up)
+                    cl = st.session_state.clients.get(nm) or ClientData(nm)
 
-                        analyzer = CompleteAnalyzer(
-                            df,
-                            nm,
-                            cd.target_acos,
-                            cd.target_roas,
-                            cd.target_cpa,
-                            cd.target_tcoas,
-                        )
-                        cd.analyzer = analyzer
+                    cl.target_acos = t_acos if t_acos > 0 else None
+                    cl.target_roas = t_roas if t_roas > 0 else None
+                    cl.target_cpa = t_cpa if t_cpa > 0 else None
+                    cl.target_tcoas = t_tcoas if t_tcoas > 0 else None
 
-                        st.session_state.clients[nm] = cd
-                        st.session_state.active_client = nm
-                        st.success("Client added.")
-                        st.balloons()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error while adding client: {e}")
-                        with st.expander("Details"):
-                            st.code(traceback.format_exc())
+                    cl.analyzer = CompleteAnalyzer(
+                        df=df,
+                        client_name=nm,
+                        target_acos=cl.target_acos,
+                        target_roas=cl.target_roas,
+                        target_cpa=cl.target_cpa,
+                        target_tcoas=cl.target_tcoas,
+                    )
+
+                    st.session_state.clients[nm] = cl
+                    st.session_state.active_client = nm
+                    st.success("Client ready.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Upload error: {e}")
+                    with st.expander("Details"):
+                        st.code(traceback.format_exc())
 
         if st.session_state.clients:
             st.markdown("---")
             st.markdown("### 📋 All clients")
             for name in list(st.session_state.clients.keys()):
-                c1, c2 = st.columns([4, 1])
-                with c1:
+                col1, col2 = st.columns([4, 1])
+                with col1:
                     st.write(f"📊 {name}")
-                with c2:
+                with col2:
                     if st.button("❌", key=f"del_{name}"):
                         del st.session_state.clients[name]
                         if st.session_state.active_client == name:
                             st.session_state.active_client = None
                         st.rerun()
 
-# -----------------------------------------------------------------------------
-# Tabs
-# -----------------------------------------------------------------------------
-def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
-    s = an.get_client_summary()
-    h = an.get_health_score()
 
-    tad = f"{cl.target_acos:.1f}%" if cl.target_acos else "30% (default)"
-    trd = f"{cl.target_roas:.1f}x" if cl.target_roas else "3.0x (default)"
-    tcpa = format_currency(cl.target_cpa) if cl.target_cpa else "Not set"
-    ttcoas = f"{cl.target_tcoas:.1f}%" if cl.target_tcoas else "Not set"
+# -----------------------------------------------------------------------------
+# Pages
+# -----------------------------------------------------------------------------
+def dashboard_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report to view dashboard.")
+        return
+
+    s = an.summary()
 
     st.subheader("💰 Financial performance")
-
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <strong>Health score:</strong> {h}/100<br>
-        <strong>Targets:</strong> ACOS {tad} • ROAS {trd} • CPA {tcpa} • TCoAS {ttcoas}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Spend", format_currency(s["total_spend"]))
-    with c2:
-        st.metric("Sales", format_currency(s["total_sales"]))
-    with c3:
-        st.metric("ROAS", f"{s['roas']:.2f}x")
-    with c4:
-        st.metric("ACOS", f"{s['acos']:.1f}%")
-    with c5:
-        st.metric("TCoAS", f"{s['tcoas']:.1f}%")
+    c1.metric("Spend", format_currency(s["spend"]))
+    c2.metric("Sales", format_currency(s["sales"]))
+    c3.metric("ROAS", f"{s['roas']:.2f}x")
+    c4.metric("ACOS", f"{s['acos']:.1f}%")
+    c5.metric("TCoAS", f"{s['tcoas']:.1f}%")
 
     st.subheader("📈 Key metrics")
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Orders", format_number(s["total_orders"]))
-    with c2:
-        st.metric("Clicks", format_number(s["total_clicks"]))
-    with c3:
-        st.metric("CTR", f"{s['avg_ctr']:.2f}%")
-    with c4:
-        st.metric("CVR", f"{s['avg_cvr']:.2f}%")
-    with c5:
-        st.metric("Avg CPC", format_currency(s["avg_cpc"]))
+    c1.metric("Orders", format_number(s["orders"]))
+    c2.metric("Clicks", format_number(s["clicks"]))
+    c3.metric("CTR", f"{s['avg_ctr']:.2f}%")
+    c4.metric("CVR", f"{s['avg_cvr']:.2f}%")
+    c5.metric("Avg CPC", format_currency(s["avg_cpc"]))
 
-    wp = s["total_wastage"] / s["total_spend"] * 100 if s["total_spend"] > 0 else 0
+    wp = (s["wastage"] / s["spend"] * 100) if s["spend"] > 0 else 0.0
     st.markdown(
         f"""
         <div class="danger-box">
             <strong>Wastage (zero‑sales spend)</strong><br>
-            {format_currency(s["total_wastage"])} ({wp:.1f}%)
+            {format_currency(s["wastage"])} ({wp:.1f}%)
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.subheader("💡 Performance insights")
-    ins = an.get_performance_insights()
+    if st.session_state.debug:
+        st.markdown(
+            f"""
+            <div class="info-box">
+                <strong>Diagnostics</strong><br>
+                Spend column: <code>{an.spend_source}</code><br>
+                Clicks column: <code>{an.clicks_source}</code><br>
+                Impressions column: <code>{an.impr_source or "Not found"}</code><br>
+                Sales source: <code>{an.sales_source or "Not detected"}</code><br>
+                Orders source: <code>{an.orders_source or "Not detected"}</code>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    for bucket, style in [
-        ("ctr_insights", "warning-box"),
-        ("cvr_insights", "warning-box"),
-        ("roas_insights", "warning-box"),
-        ("acos_insights", "warning-box"),
-        ("cpa_insights", "warning-box"),
-        ("tcoas_insights", "warning-box"),
-    ]:
-        for item in ins[bucket]:
-            lev = item["level"]
-            box = (
-                "danger-box"
-                if lev == "critical"
-                else "success-box"
-                if lev == "success"
-                else style
-            )
+    st.subheader("📍 Placement recommendations")
+    plac = an.placement_recommendations()
+    if plac["available"]:
+        dfp = plac["table"].copy()
+        # format placement table
+        dfp["Spend"] = dfp["Spend"].apply(format_currency)
+        dfp["Sales"] = dfp["Sales"].apply(format_currency)
+        dfp["ROAS"] = dfp["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        dfp["ACOS"] = dfp["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        dfp["CVR"] = dfp["CVR"].apply(lambda x: f"{float(x):.2f}%")
+        dfp["CTR"] = dfp["CTR"].apply(lambda x: f"{float(x):.2f}%")
+        show_df(dfp, height=280)
+
+        for r in plac["recs"]:
+            box = "success-box" if r["Action"] == "INCREASE" else ("danger-box" if r["Action"] == "REDUCE" else "info-box")
             st.markdown(
                 f"""
                 <div class="{box}">
-                    <strong>{item['metric']}: {item['value']}</strong><br>
-                    Issue: {item['issue']}<br>
-                    Action: {item['action']}
+                    <strong>{r["Placement"]}</strong> – {r["Action"]}<br>
+                    {r["Recommendation"]}
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-
-    plac = an.get_placement_recommendations()
-    st.subheader("📍 Placement recommendations")
-    if plac["available"]:
-        st.dataframe(add_serial_column(plac["table"]), use_container_width=True)
-        if plac["recs"]:
-            for r in plac["recs"]:
-                style = "success-box" if r["Action"] == "INCREASE" else (
-                    "danger-box" if r["Action"] == "REDUCE" else "info-box"
-                )
-                st.markdown(
-                    f"""
-                    <div class="{style}">
-                        <strong>{r['Placement']}</strong> – {r['Action']}<br>
-                        {r['Recommendation']}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
     else:
-        st.markdown(
-            f'<div class="info-box">{plac["message"]}</div>',
-            unsafe_allow_html=True,
-        )
-
-    if ins["content_suggestions"]:
-        st.subheader("📝 Content & ad suggestions")
-        st.markdown(
-            '<div class="cyan-box"><strong>Ideas to improve CTR & CVR</strong></div>',
-            unsafe_allow_html=True,
-        )
-        for txt in ins["content_suggestions"]:
-            st.markdown(f"- {txt}")
+        st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
 
 
-def render_keywords_tab(an: CompleteAnalyzer):
-    st.subheader("🎯 Keyword groups")
-    cats = an.classify_keywords_improved()
+def keywords_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    cats = an.classify_keywords()
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("🏆 Scale", len(cats["high_potential"]))
-    with c2:
-        st.metric("⚡ Test", len(cats["opportunities"]))
-    with c3:
-        st.metric("👀 Watch", len(cats["future_watch"]))
-    with c4:
-        st.metric("⚠️ Reduce", len(cats["low_potential"]))
-    with c5:
-        st.metric("🚨 Pause", len(cats["wastage"]))
+    c1.metric("🏆 Scale", len(cats["scale"]))
+    c2.metric("⚡ Test", len(cats["test"]))
+    c3.metric("👀 Watch", len(cats["watch"]))
+    c4.metric("⚠️ Reduce", len(cats["reduce"]))
+    c5.metric("🚨 Pause", len(cats["pause"]))
 
     tabs = st.tabs(
         [
-            f"🏆 Scale ({len(cats['high_potential'])})",
-            f"⚡ Test ({len(cats['opportunities'])})",
-            f"👀 Watch ({len(cats['future_watch'])})",
-            f"⚠️ Reduce ({len(cats['low_potential'])})",
-            f"🚨 Pause ({len(cats['wastage'])})",
+            f"🏆 Scale ({len(cats['scale'])})",
+            f"⚡ Test ({len(cats['test'])})",
+            f"👀 Watch ({len(cats['watch'])})",
+            f"⚠️ Reduce ({len(cats['reduce'])})",
+            f"🚨 Pause ({len(cats['pause'])})",
         ]
     )
 
     with tabs[0]:
-        if cats["high_potential"]:
-            st.success("These are your winners. Increase bids 15–25%.")
-            st.dataframe(
-                add_serial_column(pd.DataFrame(cats["high_potential"])),
-                use_container_width=True,
-            )
-        else:
-            st.info("No clear champions yet.")
-
+        show_df(pd.DataFrame(cats["scale"]))
     with tabs[1]:
-        if cats["opportunities"]:
-            st.info("Keywords with good potential – test +10–15% bids.")
-            st.dataframe(
-                add_serial_column(pd.DataFrame(cats["opportunities"])),
-                use_container_width=True,
-            )
-        else:
-            st.info("No opportunity keywords yet.")
-
+        show_df(pd.DataFrame(cats["test"]))
     with tabs[2]:
-        if cats["future_watch"]:
-            st.dataframe(
-                add_serial_column(pd.DataFrame(cats["future_watch"])),
-                use_container_width=True,
-            )
-        else:
-            st.info("No watchlist keywords.")
-
+        show_df(pd.DataFrame(cats["watch"]))
     with tabs[3]:
-        if cats["low_potential"]:
-            st.warning("Consider reducing bids by ~30%.")
-            st.dataframe(
-                add_serial_column(pd.DataFrame(cats["low_potential"])),
-                use_container_width=True,
-            )
-        else:
-            st.success("No low‑potential keywords.")
-
+        show_df(pd.DataFrame(cats["reduce"]))
     with tabs[4]:
-        if cats["wastage"]:
-            tw = sum(
-                safe_float(x["Spend"].replace("₹", "").replace(",", ""))
-                for x in cats["wastage"]
-            )
-            st.error(
-                f"Wastage on zero‑sales keywords: {format_currency(tw)}"
-            )
-            st.dataframe(
-                add_serial_column(pd.DataFrame(cats["wastage"])),
-                use_container_width=True,
-            )
-        else:
-            st.success("No pure wastage keywords – great!")
+        show_df(pd.DataFrame(cats["pause"]))
 
 
-def render_bid_tab(an: CompleteAnalyzer):
-    st.subheader("💡 Bid optimization")
-    sug = an.get_bid_suggestions_improved()
-
-    tad = f"{an.target_acos:.1f}%" if an.target_acos else "30% (default)"
-    trd = f"{an.target_roas:.1f}x" if an.target_roas else "3.0x (default)"
-    tcpa = format_currency(an.target_cpa) if an.target_cpa else "Not set"
-
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <strong>Targets:</strong> ACOS {tad} • ROAS {trd} • CPA {tcpa}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if not sug:
-        st.info("No bid suggestions – data may be too small or already optimized.")
+def bids_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
         return
 
-    act_filter = st.selectbox(
-        "Filter by action",
-        ["All", "INCREASE", "REDUCE", "PAUSE"],
-        index=0,
-    )
-    if act_filter != "All":
-        view = [x for x in sug if x["Action"] == act_filter]
-    else:
-        view = sug
+    sug = an.bid_suggestions()
+    if not sug:
+        st.info("No bid suggestions yet (need enough clicks/spend).")
+        return
 
-    inc = len([x for x in sug if x["Action"] == "INCREASE"])
-    red = len([x for x in sug if x["Action"] == "REDUCE"])
-    pau = len([x for x in sug if x["Action"] == "PAUSE"])
+    inc = sum(1 for x in sug if x["Action"] == "INCREASE")
+    red = sum(1 for x in sug if x["Action"] == "REDUCE")
+    pau = sum(1 for x in sug if x["Action"] == "PAUSE")
 
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("⬆️ Increase", inc)
-    with c2:
-        st.metric("⬇️ Reduce", red)
-    with c3:
-        st.metric("⏸️ Pause", pau)
+    c1.metric("⬆️ Increase", inc)
+    c2.metric("⬇️ Reduce", red)
+    c3.metric("⏸️ Pause", pau)
 
-    st.markdown(f"Showing **{len(view)}** of {len(sug)} suggestions.")
-    st.dataframe(
-        add_serial_column(pd.DataFrame(view)),
-        use_container_width=True,
-        height=500,
-    )
+    flt = st.selectbox("Filter", ["All", "INCREASE", "REDUCE", "PAUSE"], index=0)
+    view = sug if flt == "All" else [x for x in sug if x["Action"] == flt]
+    show_df(pd.DataFrame(view), height=520)
 
 
-def render_exports_tab(an: CompleteAnalyzer, client_name: str):
+def exports_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
     st.subheader("📥 Exports")
 
-    cats = an.classify_keywords_improved()
-    sug = an.get_bid_suggestions_improved()
-
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        st.markdown("#### 🚫 Negative keywords")
-        wast = cats["wastage"]
-        if wast:
-            rows = [
-                {
-                    "Record Type": "Keyword",
-                    "Campaign Name": k["Campaign"],
-                    "Ad Group Name": "",
-                    "Keyword or Product Targeting": k["Keyword"],
-                    "Match Type": "Negative Exact",
-                    "State": "enabled",
-                    "Operation": "create",
-                }
-                for k in wast
-            ]
+    sug = an.bid_suggestions()
+    if sug:
+        bulk = an.build_amazon_bulk_from_bids(sug)
+        if len(bulk) > 0:
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine="xlsxwriter") as wr:
-                pd.DataFrame(rows).to_excel(
-                    wr,
-                    index=False,
-                    sheet_name="Negatives",
-                )
+                bulk.to_excel(wr, index=False, sheet_name="Sponsored Products")
             out.seek(0)
             st.download_button(
-                f"Download negatives ({len(rows)})",
+                f"Download Amazon BULK bid file ({len(bulk)} rows)",
                 data=out,
-                file_name=f"Negatives_{client_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                file_name=f"Bulk_Bids_{cl.name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-        else:
-            st.info("No pure wastage keywords → no negatives needed.")
+    else:
+        st.info("No bid suggestions to export.")
 
-    with c2:
-        st.markdown("#### 💰 Bid adjustments (Amazon bulk)")
-        if sug:
-            bulk_df = an.build_amazon_bulk_from_bids(sug)
-            if len(bulk_df) == 0:
-                st.info("Suggestions exist but not enough data to build bulk file.")
-            else:
-                out = io.BytesIO()
-                with pd.ExcelWriter(out, engine="xlsxwriter") as wr:
-                    bulk_df.to_excel(
-                        wr,
-                        index=False,
-                        sheet_name="Sponsored Products",
-                    )
-                out.seek(0)
-                st.download_button(
-                    f"Download bulk bid file ({len(bulk_df)} rows)",
-                    data=out,
-                    file_name=f"Bulk_Bids_{client_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-                st.success(
-                    "File is in Amazon Sponsored Products bulk format – "
-                    "upload directly in Ads console."
-                )
-        else:
-            st.info("No bid suggestions → nothing to export.")
-
-    with c3:
-        st.markdown("#### 📊 Raw dataset")
-        if an.df is not None:
-            csv = an.df.to_csv(index=False)
-            st.download_button(
-                f"Download CSV ({len(an.df)} rows)",
-                data=csv,
-                file_name=f"Full_Data_{client_name}_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.info("No data for this client.")
-
-
-def render_report_tab(cl: ClientData, an: CompleteAnalyzer):
-    st.subheader("📝 Client report")
-    txt = an.generate_client_report()
-    st.text_area("Report", txt, height=500)
+    csv = an.df.to_csv(index=False)
     st.download_button(
-        "Download TXT",
-        data=txt,
-        file_name=f"Report_{cl.name}_{datetime.now().strftime('%Y%m%d')}.txt",
-        mime="text/plain",
+        f"Download cleaned dataset CSV ({len(an.df)} rows)",
+        data=csv,
+        file_name=f"Cleaned_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
         use_container_width=True,
     )
 
 
-def render_all_clients_tab():
-    st.subheader("👥 All clients overview")
-    data = []
-    for name, c in st.session_state.clients.items():
-        if not c.analyzer or c.analyzer.df is None:
-            continue
-        s = c.analyzer.get_client_summary()
-        h = c.analyzer.get_health_score()
-        data.append(
-            {
-                "Client": name,
-                "Health": f"{h}/100",
-                "Spend": format_currency(s["total_spend"]),
-                "Sales": format_currency(s["total_sales"]),
-                "ROAS": f"{s['roas']:.2f}x",
-                "ACOS": f"{s['acos']:.1f}%",
-                "TCoAS": f"{s['tcoas']:.1f}%",
-                "CVR": f"{s['avg_cvr']:.2f}%",
-                "Keywords": format_number(s["keywords_count"]),
-            }
-        )
-    if not data:
-        st.info("No clients with data yet.")
-        return
-    st.dataframe(add_serial_column(pd.DataFrame(data)), use_container_width=True)
-
 # -----------------------------------------------------------------------------
-# Main layout
+# Main
 # -----------------------------------------------------------------------------
-def render_dashboard():
-    render_agency_header()
+def main():
+    load_custom_css()
+    init_session()
+    sidebar()
+    header()
 
     if not st.session_state.clients:
-        st.info("Add a client from the left sidebar to start.")
+        st.markdown('<div class="info-box">Add a client and upload a report from the left sidebar.</div>', unsafe_allow_html=True)
         return
 
     if not st.session_state.active_client:
-        st.warning("Select a client from the left sidebar.")
+        st.markdown('<div class="warning-box">Select an active client from the sidebar.</div>', unsafe_allow_html=True)
         return
 
     cl = st.session_state.clients[st.session_state.active_client]
-    if not cl.analyzer or cl.analyzer.df is None:
-        st.error("No data loaded for this client.")
-        return
-
-    an = cl.analyzer
-
-    tabs = st.tabs(
-        [
-            "📊 Dashboard",
-            "🎯 Keywords",
-            "💡 Bids",
-            "📝 Report",
-            "📥 Exports",
-            "👥 All clients",
-        ]
-    )
-
+    tabs = st.tabs(["📊 Dashboard", "🎯 Keywords", "💡 Bids", "📥 Exports"])
     with tabs[0]:
-        render_dashboard_tab(cl, an)
+        dashboard_page(cl)
     with tabs[1]:
-        render_keywords_tab(an)
+        keywords_page(cl)
     with tabs[2]:
-        render_bid_tab(an)
+        bids_page(cl)
     with tabs[3]:
-        render_report_tab(cl, an)
-    with tabs[4]:
-        render_exports_tab(an, cl.name)
-    with tabs[5]:
-        render_all_clients_tab()
-
-
-def main():
-    load_custom_css()
-    init_session_state()
-    render_sidebar()
-    render_dashboard()
+        exports_page(cl)
 
     st.markdown(
         """
         <hr>
         <div style="text-align:center;color:#64748b;font-size:0.8rem;padding:0.6rem 0;">
-        Amazon Ads Dashboard Pro v7.1 – tuned for big-date reports and premium visuals.
+        Amazon Ads Dashboard Pro v7.2
         </div>
         """,
         unsafe_allow_html=True,
