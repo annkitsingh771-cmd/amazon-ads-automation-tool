@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v7.0
+Amazon Ads Agency Dashboard Pro v7.1
 
 - CPC calculation from Spend/Clicks
 - ASIN negative handling
 - Supports 7/14/30-day sales & orders columns (big-date reports)
+- Reads your headers: '7 Day Total Sales (₹)', '7 Day Total Orders (#)' etc.
+- Falls back to Advertised + Other SKU sales if needed
 - TCoAS (Total Cost of Advertising Sales) support
 - Amazon BULK upload–ready bid optimization export
 - S.No starts from 1 in all tables
@@ -76,7 +78,7 @@ def load_custom_css():
     }
     div[data-testid="stMetricLabel"] {
         font-size: 0.82rem !important;
-        color: #e5e7eb !important;   /* brighter for readability */
+        color: #e5e7eb !important;
         white-space: normal !important;
     }
     div[data-testid="stMetricValue"] {
@@ -86,7 +88,7 @@ def load_custom_css():
         word-break: break-word !important;
     }
 
-    /* Target number inputs (sidebar) */
+    /* Sidebar number inputs */
     div[data-testid="stNumberInput"] > label {
         font-size: 0.75rem;
         line-height: 1.15;
@@ -133,7 +135,7 @@ def load_custom_css():
     }
     .danger-box {
         background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
-        border-left: 4px solid #ef4444;   /* strong red for negatives */
+        border-left: 4px solid #ef4444;
         padding: 0.9rem 1rem;
         border-radius: 12px;
         margin-bottom: 0.9rem;
@@ -160,7 +162,7 @@ def load_custom_css():
         color: #cffafe;
     }
 
-    /* DataFrames rounded corners */
+    /* Tables */
     .blank > div[data-testid="stDataFrame"] table {
         border-radius: 12px;
         overflow: hidden;
@@ -257,7 +259,6 @@ def get_negative_type(value) -> str:
 
 
 def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Add S.No starting from 1 for nicer tables."""
     if df is None or len(df) == 0:
         return df
     df = df.reset_index(drop=True).copy()
@@ -279,6 +280,7 @@ class ClientData:
         self.target_roas: float | None = None
         self.target_cpa: float | None = None
         self.target_tcoas: float | None = None
+
 
 class CompleteAnalyzer:
     REQUIRED_COLUMNS = ["Customer Search Term", "Campaign Name", "Spend", "Clicks"]
@@ -317,7 +319,7 @@ class CompleteAnalyzer:
 
         df.columns = df.columns.str.strip()
 
-        # Mapping extended for 7 / 14 / 30 day reports so big-date files work.[file:70][file:1]
+        # Mapping includes your real headers like '7 Day Total Sales (₹)' and '7 Day Total Orders (#)'. [file:1]
         mapping = {
             # search term
             "customer search term": "Customer Search Term",
@@ -342,10 +344,9 @@ class CompleteAnalyzer:
             "7 day total sales": "Sales",
             "7 day total sales (₹)": "Sales",
             "7 day total sales ($)": "Sales",
+            "7 day total sales(₹)": "Sales",
             "7 day sales": "Sales",
             "7 day total revenue": "Sales",
-            "7 day total sales ": "Sales",
-            "7 day total sales(₹)": "Sales",
             "14 day total sales": "Sales",
             "14 day total sales (₹)": "Sales",
             "14 day total sales ($)": "Sales",
@@ -355,6 +356,9 @@ class CompleteAnalyzer:
             "total sales": "Sales",
             "sales": "Sales",
             "revenue": "Sales",
+            # detailed sales we can also use later
+            "7 day advertised sku sales (₹)": "Sales_Advertised",
+            "7 day other sku sales (₹)": "Sales_Other",
             # ORDERS – 7/14/30 day variants
             "7 day total orders": "Orders",
             "7 day total orders (#)": "Orders",
@@ -380,6 +384,7 @@ class CompleteAnalyzer:
             "clicks": "Clicks",
             # CPC
             "cpc": "CPC",
+            "cost per click (cpc)": "CPC",
             "cost per click": "CPC",
             "avg cpc": "CPC",
             "average cpc": "CPC",
@@ -412,7 +417,17 @@ class CompleteAnalyzer:
         if "Cpc" in df.columns and "CPC" not in df.columns:
             df["CPC"] = df["Cpc"]
 
-        numeric_cols = ["Spend", "Sales", "Clicks", "Impressions", "Orders", "CPC"]
+        numeric_cols = [
+            "Spend",
+            "Sales",
+            "Sales_Advertised",
+            "Sales_Other",
+            "Clicks",
+            "Impressions",
+            "Orders",
+            "Cpc",
+            "CPC",
+        ]
         for col in numeric_cols:
             if col in df.columns:
                 if df[col].dtype == "object":
@@ -429,7 +444,34 @@ class CompleteAnalyzer:
                     )
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # CPC from Spend/Clicks when missing.[file:70]
+        # If Sales ended up 0 but we have detailed SKU sales, rebuild Sales from them. [file:1]
+        if "Sales" in df.columns:
+            if df["Sales"].sum() == 0:
+                adv = df["Sales_Advertised"] if "Sales_Advertised" in df.columns else 0
+                oth = df["Sales_Other"] if "Sales_Other" in df.columns else 0
+                if isinstance(adv, (int, float)):
+                    df["Sales"] = adv + oth
+                else:
+                    df["Sales"] = adv.values + getattr(oth, "values", 0)
+        else:
+            # No Sales column at all: build it from best candidate
+            alt = [
+                c
+                for c in df.columns
+                if "sales" in c.lower()
+                and "total" in c.lower()
+                and "7 day" in c.lower()
+            ]
+            if alt:
+                df["Sales"] = df[alt[0]]
+            elif "Sales_Advertised" in df.columns or "Sales_Other" in df.columns:
+                adv = df["Sales_Advertised"] if "Sales_Advertised" in df.columns else 0
+                oth = df["Sales_Other"] if "Sales_Other" in df.columns else 0
+                df["Sales"] = adv + oth
+            else:
+                df["Sales"] = 0
+
+        # CPC from Spend/Clicks when missing
         df["Cpc_Calculated"] = df.apply(
             lambda x: safe_float(x.get("Spend", 0))
             / safe_float(x.get("Clicks", 1))
@@ -804,13 +846,6 @@ class CompleteAnalyzer:
             return insights
 
     def get_placement_recommendations(self) -> Dict:
-        """
-        Placement-wise summary & simple recommendations.
-
-        Works if the uploaded report has a column containing 'placement'
-        in its name (e.g., 'Placement', 'Placement Type'). Otherwise, it
-        returns an info message so the UI can explain the limitation.
-        """
         res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
         try:
             if self.df is None or len(self.df) == 0:
@@ -1191,7 +1226,7 @@ Reduce    : {len(c['low_potential'])}
 Pause     : {len(c['wastage'])}
 
 ===============================================================================
-Generated by Amazon Ads Dashboard Pro v7.0
+Generated by Amazon Ads Dashboard Pro v7.1
 ===============================================================================
 """
         except Exception as e:
@@ -1208,16 +1243,18 @@ def init_session_state():
     if "agency_name" not in st.session_state:
         st.session_state.agency_name = "Your Agency"
 
+
 def render_agency_header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.0</h1>
-            <p>CPC & negatives fixed • Big-date reports supported • Amazon bulk‑ready bid exports</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.1</h1>
+            <p>Big-date search term reports supported • Sales & Orders fixed • Premium dark UI</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 def render_sidebar():
     with st.sidebar:
@@ -1479,6 +1516,7 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
         for txt in ins["content_suggestions"]:
             st.markdown(f"- {txt}")
 
+
 def render_keywords_tab(an: CompleteAnalyzer):
     st.subheader("🎯 Keyword groups")
     cats = an.classify_keywords_improved()
@@ -1560,6 +1598,7 @@ def render_keywords_tab(an: CompleteAnalyzer):
         else:
             st.success("No pure wastage keywords – great!")
 
+
 def render_bid_tab(an: CompleteAnalyzer):
     st.subheader("💡 Bid optimization")
     sug = an.get_bid_suggestions_improved()
@@ -1610,6 +1649,7 @@ def render_bid_tab(an: CompleteAnalyzer):
         height=500,
     )
 
+
 def render_exports_tab(an: CompleteAnalyzer, client_name: str):
     st.subheader("📥 Exports")
 
@@ -1618,7 +1658,6 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
 
     c1, c2, c3 = st.columns(3)
 
-    # Negatives
     with c1:
         st.markdown("#### 🚫 Negative keywords")
         wast = cats["wastage"]
@@ -1653,7 +1692,6 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         else:
             st.info("No pure wastage keywords → no negatives needed.")
 
-    # Amazon bulk bid changes
     with c2:
         st.markdown("#### 💰 Bid adjustments (Amazon bulk)")
         if sug:
@@ -1683,7 +1721,6 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         else:
             st.info("No bid suggestions → nothing to export.")
 
-    # Full data CSV
     with c3:
         st.markdown("#### 📊 Raw dataset")
         if an.df is not None:
@@ -1698,6 +1735,7 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         else:
             st.info("No data for this client.")
 
+
 def render_report_tab(cl: ClientData, an: CompleteAnalyzer):
     st.subheader("📝 Client report")
     txt = an.generate_client_report()
@@ -1709,6 +1747,7 @@ def render_report_tab(cl: ClientData, an: CompleteAnalyzer):
         mime="text/plain",
         use_container_width=True,
     )
+
 
 def render_all_clients_tab():
     st.subheader("👥 All clients overview")
@@ -1781,6 +1820,7 @@ def render_dashboard():
     with tabs[5]:
         render_all_clients_tab()
 
+
 def main():
     load_custom_css()
     init_session_state()
@@ -1791,11 +1831,12 @@ def main():
         """
         <hr>
         <div style="text-align:center;color:#64748b;font-size:0.8rem;padding:0.6rem 0;">
-        Amazon Ads Dashboard Pro v7.0 – tuned for big-date reports and premium visuals.
+        Amazon Ads Dashboard Pro v7.1 – tuned for big-date reports and premium visuals.
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 if __name__ == "__main__":
     main()
