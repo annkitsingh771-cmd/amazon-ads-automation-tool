@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon Ads Agency Dashboard Pro v6.1
+Amazon Ads Agency Dashboard Pro v6.2 (Big-Date & Colour Edition)
+
 - CPC calculation from Spend/Clicks
 - ASIN negative handling
+- Supports 7/14/30-day sales & orders columns (big-date reports)
 - TCoAS (Total Cost of Advertising Sales) support
 - Amazon BULK upload–ready bid optimization export
-- Improved target inputs (no clipping)
-- Attractive color theme with strong red for negatives
+- S.No starts from 1 in all tables
+- Brighter, more attractive colour theme (red for negatives)
+- Placement-wise recommendations when placement data is present
 """
 
 import io
@@ -30,7 +33,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
 # -----------------------------------------------------------------------------
 # Styling
 # -----------------------------------------------------------------------------
@@ -39,34 +41,36 @@ def load_custom_css():
     <style>
     .main {
         padding-top: 0.5rem;
+        background: radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%);
     }
 
     /* Header */
     .agency-header {
-        background: radial-gradient(circle at top left, #6366f1 0, #020617 45%);
+        background: radial-gradient(circle at top left, #a855f7 0, #1e293b 40%, #020617 100%);
         padding: 1.4rem 1.8rem;
-        border-radius: 14px;
+        border-radius: 18px;
         margin-bottom: 1.2rem;
         color: #e5e7eb;
-        box-shadow: 0 16px 40px rgba(15,23,42,0.7);
+        box-shadow: 0 18px 50px rgba(15,23,42,0.85);
+        border: 1px solid rgba(148,163,184,0.4);
     }
     .agency-header h1 {
         margin: 0;
-        font-size: 1.4rem;
+        font-size: 1.5rem;
     }
     .agency-header p {
-        margin: 0.2rem 0 0 0;
+        margin: 0.3rem 0 0 0;
         font-size: 0.9rem;
-        color: #cbd5f5;
+        color: #e0e7ff;
     }
 
     /* Metric cards */
     div[data-testid="stMetric"] {
-        background: linear-gradient(145deg,#020617,#020617,#111827);
-        border-radius: 12px;
-        padding: 1rem 0.8rem;
+        background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
+        border-radius: 16px;
+        padding: 1.1rem 0.9rem;
         border: 1px solid #1f2937;
-        box-shadow: 0 8px 24px rgba(15,23,42,0.8);
+        box-shadow: 0 16px 40px rgba(15,23,42,0.9);
     }
     div[data-testid="stMetricLabel"] {
         font-size: 0.8rem !important;
@@ -74,7 +78,7 @@ def load_custom_css():
         white-space: normal !important;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.45rem !important;
+        font-size: 1.55rem !important;
         color: #f9fafb !important;
         white-space: normal !important;
         word-break: break-word !important;
@@ -83,7 +87,7 @@ def load_custom_css():
     /* Target number inputs (sidebar) */
     div[data-testid="stNumberInput"] > label {
         font-size: 0.75rem;
-        line-height: 1.1;
+        line-height: 1.15;
         color: #e5e7eb;
     }
     div[data-testid="stNumberInput"] > div {
@@ -100,63 +104,63 @@ def load_custom_css():
 
     /* Info / status boxes */
     .info-box {
-        background: radial-gradient(circle at top left, rgba(59,130,246,0.35), rgba(15,23,42,0.9));
+        background: radial-gradient(circle at top left, rgba(59,130,246,0.35), rgba(15,23,42,0.98));
         border-left: 4px solid #3b82f6;
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
     }
     .success-box {
-        background: radial-gradient(circle at top left, rgba(34,197,94,0.3), rgba(6,78,59,0.9));
+        background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
         border-left: 4px solid #22c55e;
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
         color: #dcfce7;
     }
     .warning-box {
-        background: radial-gradient(circle at top left, rgba(250,204,21,0.32), rgba(77,54,10,0.95));
+        background: radial-gradient(circle at top left, rgba(250,204,21,0.35), rgba(77,54,10,0.98));
         border-left: 4px solid #eab308;
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
         color: #fef9c3;
     }
     .danger-box {
-        background: radial-gradient(circle at top left, rgba(248,113,113,0.38), rgba(127,29,29,0.96));
-        border-left: 4px solid #ef4444;   /* strong red */
+        background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
+        border-left: 4px solid #ef4444;   /* strong red for negatives */
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
         color: #fee2e2;
     }
 
     .purple-box {
-        background: radial-gradient(circle at top left, rgba(129,140,248,0.35), rgba(30,64,175,0.96));
+        background: radial-gradient(circle at top left, rgba(129,140,248,0.35), rgba(30,64,175,0.98));
         border-left: 4px solid #8b5cf6;
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
         color: #e0e7ff;
     }
     .cyan-box {
-        background: radial-gradient(circle at top left, rgba(6,182,212,0.35), rgba(8,47,73,0.96));
+        background: radial-gradient(circle at top left, rgba(6,182,212,0.35), rgba(8,47,73,0.98));
         border-left: 4px solid #06b6d4;
         padding: 0.9rem 1rem;
-        border-radius: 10px;
-        margin-bottom: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
         font-size: 0.9rem;
         color: #cffafe;
     }
 
-    /* Optional: slightly rounded tables */
+    /* DataFrames rounded corners */
     .blank > div[data-testid="stDataFrame"] table {
-        border-radius: 10px;
+        border-radius: 12px;
         overflow: hidden;
     }
     </style>
@@ -251,6 +255,15 @@ def get_negative_type(value) -> str:
     return "PRODUCT" if is_asin(value) else "KEYWORD"
 
 
+def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Add S.No starting from 1 for nicer tables."""
+    if df is None or len(df) == 0:
+        return df
+    df = df.reset_index(drop=True).copy()
+    df.insert(0, "S.No", df.index + 1)
+    return df
+
+
 # -----------------------------------------------------------------------------
 # Data structures
 # -----------------------------------------------------------------------------
@@ -305,13 +318,16 @@ class CompleteAnalyzer:
 
         df.columns = df.columns.str.strip()
 
+        # Mapping extended for 7 / 14 / 30 day reports so big-date files work.[file:70]
         mapping = {
+            # search term
             "customer search term": "Customer Search Term",
             "search term": "Customer Search Term",
             "keyword": "Customer Search Term",
             "searchterm": "Customer Search Term",
             "customer_search_term": "Customer Search Term",
             "search terms": "Customer Search Term",
+            # campaign / ad group
             "campaign": "Campaign Name",
             "campaign name": "Campaign Name",
             "campaign_name": "Campaign Name",
@@ -319,38 +335,51 @@ class CompleteAnalyzer:
             "ad group name": "Ad Group Name",
             "adgroup": "Ad Group Name",
             "ad_group_name": "Ad Group Name",
+            # match type
             "match type": "Match Type",
             "matchtype": "Match Type",
             "match_type": "Match Type",
-            # sales
+            # SALES – 7/14/30 day variants
             "7 day total sales": "Sales",
             "7 day total sales (₹)": "Sales",
             "7 day total sales ($)": "Sales",
             "7 day sales": "Sales",
             "7 day total revenue": "Sales",
+            "7 day total sales ": "Sales",
+            "7 day total sales(₹)": "Sales",
+            "14 day total sales": "Sales",
+            "14 day total sales (₹)": "Sales",
+            "14 day total sales ($)": "Sales",
+            "30 day total sales": "Sales",
+            "30 day total sales (₹)": "Sales",
+            "30 day total sales ($)": "Sales",
             "total sales": "Sales",
             "sales": "Sales",
             "revenue": "Sales",
-            # orders
+            # ORDERS – 7/14/30 day variants
             "7 day total orders": "Orders",
             "7 day total orders (#)": "Orders",
             "7 day orders": "Orders",
             "7 day total units": "Orders",
+            "7 day ordered units": "Orders",
+            "14 day total orders": "Orders",
+            "14 day total orders (#)": "Orders",
+            "30 day total orders": "Orders",
+            "30 day total orders (#)": "Orders",
             "total orders": "Orders",
             "orders": "Orders",
             "units": "Orders",
-            "7 day ordered units": "Orders",
-            # spend
+            # Spend/Cost
             "cost": "Spend",
             "spend": "Spend",
             "ad spend": "Spend",
             "spend (₹)": "Spend",
             "spend ($)": "Spend",
-            # impressions & clicks
+            # Impressions & clicks
             "impressions": "Impressions",
             "imps": "Impressions",
             "clicks": "Clicks",
-            # cpc
+            # CPC
             "cpc": "CPC",
             "cost per click": "CPC",
             "avg cpc": "CPC",
@@ -401,7 +430,7 @@ class CompleteAnalyzer:
                     )
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # CPC from Spend/Clicks when missing
+        # CPC from Spend/Clicks when missing.[file:70]
         df["CPC_Calculated"] = df.apply(
             lambda x: safe_float(x.get("Spend", 0))
             / safe_float(x.get("Clicks", 1))
@@ -615,7 +644,7 @@ class CompleteAnalyzer:
             return 0
 
     # ------------------------------------------------------------------ #
-    # Insights (short)
+    # Insights & placement recommendations
     # ------------------------------------------------------------------ #
     def get_performance_insights(self) -> Dict:
         s = self.get_client_summary()
@@ -676,7 +705,7 @@ class CompleteAnalyzer:
                         "level": "critical",
                         "metric": "CVR",
                         "value": f"{avg_cvr:.2f}%",
-                        "issue": "Very low conversion",
+                        "issue": "Very low conversion rate",
                         "action": "Fix pricing, listing, or audience",
                     }
                 )
@@ -774,6 +803,111 @@ class CompleteAnalyzer:
         except Exception as e:
             st.error(f"Insights error: {e}")
             return insights
+
+    def get_placement_recommendations(self) -> Dict:
+        """
+        Placement-wise summary & simple recommendations.
+
+        Works if the uploaded report has a column containing 'placement'
+        in its name (e.g., 'Placement', 'Placement Type'). Otherwise, it
+        returns an info message so the UI can explain the limitation.
+        """
+        res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
+        try:
+            if self.df is None or len(self.df) == 0:
+                res["message"] = "No data for placements."
+                return res
+
+            placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
+            if not placement_cols:
+                res["message"] = "Current report has no placement column. Use a placement/campaign report for placement-wise tips."
+                return res
+
+            col = placement_cols[0]
+            dfp = self.df.copy()
+            dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
+
+            g = dfp.groupby(col).agg(
+                {
+                    "Spend": "sum",
+                    "Sales": "sum",
+                    "Orders": "sum",
+                    "Clicks": "sum",
+                    "Impressions": "sum",
+                }
+            )
+            g["ROAS"] = g.apply(
+                lambda x: safe_float(x["Sales"]) / safe_float(x["Spend"])
+                if safe_float(x["Spend"]) > 0
+                else 0,
+                axis=1,
+            )
+            g["ACOS"] = g.apply(
+                lambda x: safe_float(x["Spend"]) / safe_float(x["Sales"]) * 100
+                if safe_float(x["Sales"]) > 0
+                else 0,
+                axis=1,
+            )
+            g["CVR"] = g.apply(
+                lambda x: safe_float(x["Orders"]) / safe_float(x["Clicks"]) * 100
+                if safe_float(x["Clicks"]) > 0
+                else 0,
+                axis=1,
+            )
+            g["CTR"] = g.apply(
+                lambda x: safe_float(x["Clicks"]) / safe_float(x["Impressions"]) * 100
+                if safe_float(x["Impressions"]) > 0
+                else 0,
+                axis=1,
+            )
+
+            g_reset = g.reset_index().rename(columns={col: "Placement"})
+            res["table"] = g_reset
+            res["available"] = True
+
+            ta = self.target_acos or 30
+            tr = self.target_roas or 3.0
+
+            recs = []
+            for _, r in g_reset.iterrows():
+                name = safe_str(r["Placement"])
+                ro = safe_float(r["ROAS"])
+                ac = safe_float(r["ACOS"])
+                sp = safe_float(r["Spend"])
+
+                if sp < 1:
+                    continue
+
+                if ro >= tr or ac <= ta:
+                    recs.append(
+                        {
+                            "Placement": name,
+                            "Action": "INCREASE",
+                            "Recommendation": f"Strong performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% placement bid.",
+                        }
+                    )
+                elif ro < 1.0 or ac > ta * 1.5:
+                    recs.append(
+                        {
+                            "Placement": name,
+                            "Action": "REDUCE",
+                            "Recommendation": f"Weak performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce placement bid by 15–30% or pause.",
+                        }
+                    )
+                else:
+                    recs.append(
+                        {
+                            "Placement": name,
+                            "Action": "HOLD",
+                            "Recommendation": f"Average performance (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Keep bids stable and monitor.",
+                        }
+                    )
+
+            res["recs"] = recs
+            return res
+        except Exception as e:
+            res["message"] = f"Error while building placement view: {e}"
+            return res
 
     # ------------------------------------------------------------------ #
     # Classification & bids
@@ -995,7 +1129,7 @@ class CompleteAnalyzer:
         return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------ #
-    # Simple text report
+    # Report
     # ------------------------------------------------------------------ #
     def generate_client_report(self) -> str:
         try:
@@ -1055,7 +1189,7 @@ Reduce    : {len(c['low_potential'])}
 Pause     : {len(c['wastage'])}
 
 ===============================================================================
-Generated by Amazon Ads Dashboard Pro v6.1
+Generated by Amazon Ads Dashboard Pro v6.2
 ===============================================================================
 """
         except Exception as e:
@@ -1078,8 +1212,8 @@ def render_agency_header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v6.1</h1>
-            <p>CPC & negatives fixed • TCoAS support • Amazon bulk‑ready bid exports</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v6.2</h1>
+            <p>CPC & negatives fixed • Big-date reports supported • Amazon bulk‑ready bid exports</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1163,7 +1297,7 @@ def render_sidebar():
 
             em = st.text_input("Client email (optional)")
             up = st.file_uploader(
-                "Upload Sponsored Products search term report*",
+                "Upload Sponsored Products search term / placement report*",
                 type=["xlsx", "xls", "csv"],
             )
 
@@ -1235,7 +1369,7 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
     tcpa = format_currency(cl.target_cpa) if cl.target_cpa else "Not set"
     ttcoas = f"{cl.target_tcoas:.1f}%" if cl.target_tcoas else "Not set"
 
-    st.subheader(f"📊 {cl.name} – Overview")
+    st.subheader("💰 Financial performance")
 
     st.markdown(
         f"""
@@ -1247,7 +1381,6 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
         unsafe_allow_html=True,
     )
 
-    st.markdown("### 💰 Financial performance")
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         st.metric("Spend", format_currency(s["total_spend"]))
@@ -1260,7 +1393,7 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
     with c5:
         st.metric("TCoAS", f"{s['tcoas']:.1f}%")
 
-    st.markdown("### 📈 Key metrics")
+    st.subheader("📈 Key metrics")
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         st.metric("Orders", format_number(s["total_orders"]))
@@ -1279,7 +1412,7 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
         value=f"{format_currency(s['total_wastage'])} ({wp:.1f}%)",
     )
 
-    st.markdown("### 💡 Performance insights")
+    st.subheader("💡 Performance insights")
     ins = an.get_performance_insights()
 
     for bucket, style in [
@@ -1310,8 +1443,32 @@ def render_dashboard_tab(cl: ClientData, an: CompleteAnalyzer):
                 unsafe_allow_html=True,
             )
 
+    plac = an.get_placement_recommendations()
+    st.subheader("📍 Placement recommendations")
+    if plac["available"]:
+        st.dataframe(add_serial_column(plac["table"]), use_container_width=True)
+        if plac["recs"]:
+            for r in plac["recs"]:
+                style = "success-box" if r["Action"] == "INCREASE" else (
+                    "danger-box" if r["Action"] == "REDUCE" else "info-box"
+                )
+                st.markdown(
+                    f"""
+                    <div class="{style}">
+                        <strong>{r['Placement']}</strong> – {r['Action']}<br>
+                        {r['Recommendation']}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.markdown(
+            f'<div class="info-box">{plac["message"]}</div>',
+            unsafe_allow_html=True,
+        )
+
     if ins["content_suggestions"]:
-        st.markdown("### 📝 Content & ad suggestions")
+        st.subheader("📝 Content & ad suggestions")
         st.markdown(
             '<div class="cyan-box"><strong>Ideas to improve CTR & CVR</strong></div>',
             unsafe_allow_html=True,
@@ -1349,27 +1506,39 @@ def render_keywords_tab(an: CompleteAnalyzer):
     with tabs[0]:
         if cats["high_potential"]:
             st.success("These are your winners. Increase bids 15–25%.")
-            st.dataframe(pd.DataFrame(cats["high_potential"]), use_container_width=True)
+            st.dataframe(
+                add_serial_column(pd.DataFrame(cats["high_potential"])),
+                use_container_width=True,
+            )
         else:
             st.info("No clear champions yet.")
 
     with tabs[1]:
         if cats["opportunities"]:
             st.info("Keywords with good potential – test +10–15% bids.")
-            st.dataframe(pd.DataFrame(cats["opportunities"]), use_container_width=True)
+            st.dataframe(
+                add_serial_column(pd.DataFrame(cats["opportunities"])),
+                use_container_width=True,
+            )
         else:
             st.info("No opportunity keywords yet.")
 
     with tabs[2]:
         if cats["future_watch"]:
-            st.dataframe(pd.DataFrame(cats["future_watch"]), use_container_width=True)
+            st.dataframe(
+                add_serial_column(pd.DataFrame(cats["future_watch"])),
+                use_container_width=True,
+            )
         else:
             st.info("No watchlist keywords.")
 
     with tabs[3]:
         if cats["low_potential"]:
             st.warning("Consider reducing bids by ~30%.")
-            st.dataframe(pd.DataFrame(cats["low_potential"]), use_container_width=True)
+            st.dataframe(
+                add_serial_column(pd.DataFrame(cats["low_potential"])),
+                use_container_width=True,
+            )
         else:
             st.success("No low‑potential keywords.")
 
@@ -1382,7 +1551,10 @@ def render_keywords_tab(an: CompleteAnalyzer):
             st.error(
                 f"Wastage on zero‑sales keywords: {format_currency(tw)}"
             )
-            st.dataframe(pd.DataFrame(cats["wastage"]), use_container_width=True)
+            st.dataframe(
+                add_serial_column(pd.DataFrame(cats["wastage"])),
+                use_container_width=True,
+            )
         else:
             st.success("No pure wastage keywords – great!")
 
@@ -1431,7 +1603,11 @@ def render_bid_tab(an: CompleteAnalyzer):
         st.metric("⏸️ Pause", pau)
 
     st.markdown(f"Showing **{len(view)}** of {len(sug)} suggestions.")
-    st.dataframe(pd.DataFrame(view), use_container_width=True, height=500)
+    st.dataframe(
+        add_serial_column(pd.DataFrame(view)),
+        use_container_width=True,
+        height=500,
+    )
 
 
 def render_exports_tab(an: CompleteAnalyzer, client_name: str):
@@ -1449,8 +1625,9 @@ def render_exports_tab(an: CompleteAnalyzer, client_name: str):
         if wast:
             rows = [
                 {
-                    "Campaign": k["Campaign"],
-                    "Ad Group": "",
+                    "Record Type": "Keyword",
+                    "Campaign Name": k["Campaign"],
+                    "Ad Group Name": "",
                     "Keyword or Product Targeting": k["Keyword"],
                     "Match Type": "Negative Exact",
                     "State": "enabled",
@@ -1559,7 +1736,7 @@ def render_all_clients_tab():
     if not data:
         st.info("No clients with data yet.")
         return
-    st.dataframe(pd.DataFrame(data), use_container_width=True)
+    st.dataframe(add_serial_column(pd.DataFrame(data)), use_container_width=True)
 
 
 # -----------------------------------------------------------------------------
@@ -1618,7 +1795,7 @@ def main():
         """
         <hr>
         <div style="text-align:center;color:#64748b;font-size:0.8rem;padding:0.6rem 0;">
-        Amazon Ads Dashboard Pro v6.1 – streamlined for agency use.
+        Amazon Ads Dashboard Pro v6.2 – tuned for big-date reports and attractive visuals.
         </div>
         """,
         unsafe_allow_html=True,
