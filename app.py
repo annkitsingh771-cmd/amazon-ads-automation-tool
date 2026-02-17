@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v7.4
+Amazon Ads Dashboard Pro v7.5
 
-New in this version:
-1) Theme-aware styling: looks clean in both Streamlit light and dark themes.
-2) Wastage hotspot section on Dashboard (top zero-sales spend terms with slider).
-3) Extra export: wastage-only CSV.
-4) Same big-date column detection, column overrides, premium cards, and BULK file export.
+Changes vs v7.4:
+1) Target ACOS % and Target ROAS are optional (just defaults).
+2) Upload is required only when CREATING a new client.
+   For existing clients, you can update just targets without re-uploading.
+3) Theme-aware styling for light/dark Streamlit themes.
+4) Wastage hotspots section + wastage-only CSV export.
 """
 
 import io
@@ -59,17 +60,15 @@ def get_excel_writer_engine(preferred: str = "xlsxwriter") -> str:
 
 def load_custom_css():
     """
-    Use Streamlit's theme context to switch between light and dark styling. [web:27][web:26]
+    Use Streamlit theme context to switch between light and dark styling. [web:26][web:27]
     """
     theme_type = "dark"
     try:
-        # In recent Streamlit versions this returns "light" or "dark". [web:27]
         theme_type = getattr(st.context.theme, "type", "dark")
     except Exception:
         pass
 
     if str(theme_type).lower() == "light":
-        # Light theme variant
         css = """
         <style>
         .stApp {
@@ -170,7 +169,6 @@ def load_custom_css():
         </style>
         """
     else:
-        # Dark theme variant (your original style)
         css = """
         <style>
         .main {
@@ -271,7 +269,6 @@ def load_custom_css():
         }
         </style>
         """
-
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -845,8 +842,7 @@ class CompleteAnalyzer:
         res["recs"] = recs
         return res
 
-    # New helper: top wastage rows for dashboard and export
-    def top_wastage(self, n: int = 50, min_spend: float = 0.0) -> pd.DataFrame:
+    def top_wastage(self, n: Optional[int] = 50, min_spend: float = 0.0) -> pd.DataFrame:
         if self.df is None or len(self.df) == 0:
             return pd.DataFrame()
         df = self.df.copy()
@@ -888,7 +884,7 @@ def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.4</h1>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.5</h1>
             <p>Big-date Sales • Column Override • Wastage hotspots • Premium UI</p>
         </div>
         """,
@@ -923,20 +919,37 @@ def sidebar():
         st.markdown("---")
         st.markdown("### 👥 Clients")
 
-        if st.session_state.clients:
-            sel = st.selectbox("Active client", list(st.session_state.clients.keys()))
+        existing_names = list(st.session_state.clients.keys())
+        existing_client = None
+        if existing_names:
+            sel = st.selectbox("Active client", existing_names)
             st.session_state.active_client = sel
+            existing_client = st.session_state.clients.get(sel)
 
         st.markdown("---")
         with st.expander("➕ Add / Update client", expanded=True):
-            nm = st.text_input("Client name*")
+            nm = st.text_input("Client name*", value=existing_client.name if existing_client else "")
+
             t1, t2 = st.columns(2)
             with t1:
-                t_acos = st.number_input("Target ACOS %", value=30.0, step=5.0, format="%.1f")
+                t_acos = st.number_input(
+                    "Target ACOS % (optional)",
+                    value=float(existing_client.target_acos if existing_client and existing_client.target_acos else 30.0),
+                    step=5.0,
+                    format="%.1f",
+                )
             with t2:
-                t_roas = st.number_input("Target ROAS", value=3.0, step=0.5, format="%.1f")
+                t_roas = st.number_input(
+                    "Target ROAS (optional)",
+                    value=float(existing_client.target_roas if existing_client and existing_client.target_roas else 3.0),
+                    step=0.5,
+                    format="%.1f",
+                )
 
-            up = st.file_uploader("Upload Search Term report (XLSX/CSV)*", type=["xlsx", "xls", "csv"])
+            up = st.file_uploader(
+                "Upload Search Term report (XLSX/CSV)* (required only for new client)",
+                type=["xlsx", "xls", "csv"],
+            )
 
             preview_df = None
             detected = {}
@@ -980,31 +993,50 @@ def sidebar():
                 if not nm:
                     st.error("Enter client name.")
                     return
-                if up is None:
-                    st.error("Upload a report file.")
+
+                current_client = st.session_state.clients.get(nm)
+
+                # New client: file is required
+                if current_client is None and up is None:
+                    st.error("Upload a Search Term report for a new client.")
                     return
 
                 try:
-                    df = read_uploaded_report(up)
-                    cl = st.session_state.clients.get(nm) or ClientData(nm)
-                    cl.target_acos = float(t_acos)
-                    cl.target_roas = float(t_roas)
-                    cl.column_overrides = {
-                        k: v for k, v in (overrides or {}).items() if safe_str(v, "").strip()
-                    }
-                    cl.analyzer = CompleteAnalyzer(
-                        raw_df=df,
-                        client_name=nm,
-                        column_overrides=cl.column_overrides,
-                        target_acos=cl.target_acos,
-                        target_roas=cl.target_roas,
-                    )
-                    st.session_state.clients[nm] = cl
-                    st.session_state.active_client = nm
-                    st.success("Client ready. Open Dashboard.")
+                    if up is not None:
+                        # Create or refresh from uploaded file
+                        df = read_uploaded_report(up)
+                        cl = current_client or ClientData(nm)
+                        cl.target_acos = float(t_acos) if t_acos > 0 else None
+                        cl.target_roas = float(t_roas) if t_roas > 0 else None
+                        cl.column_overrides = {
+                            k: v for k, v in (overrides or {}).items() if safe_str(v, "").strip()
+                        }
+                        cl.analyzer = CompleteAnalyzer(
+                            raw_df=df,
+                            client_name=nm,
+                            column_overrides=cl.column_overrides,
+                            target_acos=cl.target_acos,
+                            target_roas=cl.target_roas,
+                        )
+                        st.session_state.clients[nm] = cl
+                        st.session_state.active_client = nm
+                        st.success("Client created/updated from uploaded report.")
+                    else:
+                        # Existing client, updating targets only
+                        if current_client is None:
+                            st.error("No existing client found with this name.")
+                            return
+                        current_client.target_acos = float(t_acos) if t_acos > 0 else None
+                        current_client.target_roas = float(t_roas) if t_roas > 0 else None
+                        if current_client.analyzer:
+                            current_client.analyzer.target_acos = current_client.target_acos
+                            current_client.analyzer.target_roas = current_client.target_roas
+                        st.session_state.clients[nm] = current_client
+                        st.session_state.active_client = nm
+                        st.success("Targets updated. Open Dashboard.")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Upload error: {e}")
+                    st.error(f"Upload/update error: {e}")
                     with st.expander("Details"):
                         st.code(traceback.format_exc())
 
@@ -1095,7 +1127,6 @@ def dashboard_page(cl: ClientData):
     else:
         st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
 
-    # New: Wastage hotspot table
     st.subheader("🔥 Wastage hotspots (zero‑sales spend terms)")
     min_spend = st.slider(
         "Minimum spend to include (₹)",
@@ -1227,7 +1258,6 @@ def exports_page(cl: ClientData):
         else:
             st.info("No bid suggestions to export.")
 
-    # Clean dataset export
     csv = an.df.to_csv(index=False)
     st.download_button(
         f"Download cleaned dataset CSV ({len(an.df)} rows)",
@@ -1237,7 +1267,6 @@ def exports_page(cl: ClientData):
         use_container_width=True,
     )
 
-    # New: wastage-only export
     wdf = an.top_wastage(n=None, min_spend=0.0)
     if not wdf.empty:
         wcsv = wdf.to_csv(index=False)
