@@ -2,15 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v7.3
+Amazon Ads Dashboard Pro v7.4
 
-Fixes your issues:
-1) Big-date report support (7/14/30 day Sales & Orders detection) + manual column override.
-2) S.No starts from 1 (and hide default index).
-3) Premium readable colors + higher contrast tables and labels.
-4) Placement-wise recommendations when placement column exists.
-5) Reset button to clear old session clients (fixes “still showing 0 after code update”).
-6) Safe Excel export: prefers xlsxwriter, falls back to openpyxl (no ModuleNotFoundError).
+New in this version:
+1) Theme-aware styling: looks clean in both Streamlit light and dark themes.
+2) Wastage hotspot section on Dashboard (top zero-sales spend terms with slider).
+3) Extra export: wastage-only CSV.
+4) Same big-date column detection, column overrides, premium cards, and BULK file export.
 """
 
 import io
@@ -41,9 +39,8 @@ def get_excel_writer_engine(preferred: str = "xlsxwriter") -> str:
     """
     Return an engine for pd.ExcelWriter.
 
-    - Try xlsxwriter first (better formatting support).
-    - If xlsxwriter is not installed, fall back to openpyxl to avoid
-      ModuleNotFoundError on servers where xlsxwriter is missing.
+    - Try xlsxwriter first.
+    - If xlsxwriter is not installed, fall back to openpyxl.
     """
     if preferred == "xlsxwriter":
         try:
@@ -52,113 +49,229 @@ def get_excel_writer_engine(preferred: str = "xlsxwriter") -> str:
             return "xlsxwriter"
         except Exception:
             pass
-    # openpyxl is bundled in many environments and is the standard engine. [web:19][web:20]
     return "openpyxl"
 
 
 # -----------------------------------------------------------------------------
-# Premium styling (high contrast)
+# Theme-aware premium styling
 # -----------------------------------------------------------------------------
 
 
 def load_custom_css():
-    css = """
-    <style>
-    .main {
-        padding-top: 0.5rem;
-        background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
-    }
-    .agency-header {
-        background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
-        padding: 1.4rem 1.8rem;
-        border-radius: 18px;
-        margin-bottom: 1.1rem;
-        color: #e5e7eb;
-        box-shadow: 0 18px 50px rgba(15,23,42,0.9);
-        border: 1px solid rgba(148,163,184,0.5);
-    }
-    .agency-header h1 {
-        margin: 0;
-        font-size: 1.5rem;
-    }
-    .agency-header p {
-        margin: 0.35rem 0 0 0;
-        font-size: 0.9rem;
-        color: #e0e7ff;
-    }
-    div[data-testid="stMetric"] {
-        background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
-        border-radius: 16px;
-        padding: 1.1rem 0.9rem;
-        border: 1px solid #1f2937;
-        box-shadow: 0 16px 40px rgba(15,23,42,0.9);
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.82rem !important;
-        color: #e5e7eb !important;
-        white-space: normal !important;
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 1.55rem !important;
-        color: #f9fafb !important;
-        white-space: normal !important;
-        word-break: break-word !important;
-    }
-    .info-box {
-        background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
-        border-left: 4px solid #3b82f6;
-        padding: 0.95rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.92rem;
-        color: #e5e7eb;
-    }
-    .success-box {
-        background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
-        border-left: 4px solid #22c55e;
-        padding: 0.95rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.92rem;
-        color: #dcfce7;
-    }
-    .warning-box {
-        background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
-        border-left: 4px solid #eab308;
-        padding: 0.95rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.92rem;
-        color: #fef9c3;
-    }
-    .danger-box {
-        background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
-        border-left: 4px solid #ef4444;
-        padding: 0.95rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.92rem;
-        color: #fee2e2;
-    }
-    div[data-testid="stDataFrame"] {
-        border-radius: 14px;
-        border: 1px solid rgba(148,163,184,0.35);
-        overflow: hidden;
-        box-shadow: 0 14px 36px rgba(15,23,42,0.65);
-    }
-    div[data-testid="stDataFrame"] thead tr th {
-        background: linear-gradient(135deg, rgba(99,102,241,0.35), rgba(2,6,23,0.95)) !important;
-        color: #f8fafc !important;
-        font-weight: 700 !important;
-        border-bottom: 1px solid rgba(148,163,184,0.35) !important;
-    }
-    div[data-testid="stDataFrame"] tbody tr td {
-        color: #e5e7eb !important;
-        background: rgba(2,6,23,0.65) !important;
-        border-bottom: 1px solid rgba(148,163,184,0.14) !important;
-    }
-    </style>
     """
+    Use Streamlit's theme context to switch between light and dark styling. [web:27][web:26]
+    """
+    theme_type = "dark"
+    try:
+        # In recent Streamlit versions this returns "light" or "dark". [web:27]
+        theme_type = getattr(st.context.theme, "type", "dark")
+    except Exception:
+        pass
+
+    if str(theme_type).lower() == "light":
+        # Light theme variant
+        css = """
+        <style>
+        .stApp {
+            background: radial-gradient(circle at top, #e5e7eb 0, #e5e7eb 40%, #ffffff 100%);
+        }
+        .main {
+            padding-top: 0.5rem;
+        }
+        .agency-header {
+            background: linear-gradient(135deg, #4f46e5 0, #6366f1 35%, #111827 100%);
+            padding: 1.4rem 1.8rem;
+            border-radius: 18px;
+            margin-bottom: 1.1rem;
+            color: #f9fafb;
+            box-shadow: 0 18px 40px rgba(15,23,42,0.35);
+            border: 1px solid rgba(148,163,184,0.6);
+        }
+        .agency-header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .agency-header p {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.9rem;
+            color: #e0e7ff;
+        }
+        div[data-testid="stMetric"] {
+            background: radial-gradient(circle at top left, #eef2ff 0, #e5e7eb 55%, #e5e7eb 100%);
+            border-radius: 16px;
+            padding: 1.1rem 0.9rem;
+            border: 1px solid #d1d5db;
+            box-shadow: 0 10px 26px rgba(148,163,184,0.6);
+        }
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.82rem !important;
+            color: #374151 !important;
+            white-space: normal !important;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.55rem !important;
+            color: #111827 !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+        }
+        .info-box {
+            background: linear-gradient(135deg, rgba(59,130,246,0.10), #f9fafb);
+            border-left: 4px solid #3b82f6;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #111827;
+        }
+        .success-box {
+            background: linear-gradient(135deg, rgba(34,197,94,0.1), #ecfdf3);
+            border-left: 4px solid #22c55e;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #064e3b;
+        }
+        .warning-box {
+            background: linear-gradient(135deg, rgba(250,204,21,0.12), #fefce8);
+            border-left: 4px solid #eab308;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #78350f;
+        }
+        .danger-box {
+            background: linear-gradient(135deg, rgba(248,113,113,0.16), #fef2f2);
+            border-left: 4px solid #ef4444;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #7f1d1d;
+        }
+        div[data-testid="stDataFrame"] {
+            border-radius: 14px;
+            border: 1px solid rgba(148,163,184,0.7);
+            overflow: hidden;
+            box-shadow: 0 12px 30px rgba(148,163,184,0.6);
+        }
+        div[data-testid="stDataFrame"] thead tr th {
+            background: linear-gradient(135deg, rgba(79,70,229,0.2), rgba(30,64,175,0.98)) !important;
+            color: #f9fafb !important;
+            font-weight: 700 !important;
+            border-bottom: 1px solid rgba(148,163,184,0.7) !important;
+        }
+        div[data-testid="stDataFrame"] tbody tr td {
+            color: #111827 !important;
+            background: #f9fafb !important;
+            border-bottom: 1px solid rgba(209,213,219,0.7) !important;
+        }
+        </style>
+        """
+    else:
+        # Dark theme variant (your original style)
+        css = """
+        <style>
+        .main {
+            padding-top: 0.5rem;
+            background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
+        }
+        .stApp {
+            background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
+        }
+        .agency-header {
+            background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
+            padding: 1.4rem 1.8rem;
+            border-radius: 18px;
+            margin-bottom: 1.1rem;
+            color: #e5e7eb;
+            box-shadow: 0 18px 50px rgba(15,23,42,0.9);
+            border: 1px solid rgba(148,163,184,0.5);
+        }
+        .agency-header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .agency-header p {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.9rem;
+            color: #e0e7ff;
+        }
+        div[data-testid="stMetric"] {
+            background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
+            border-radius: 16px;
+            padding: 1.1rem 0.9rem;
+            border: 1px solid #1f2937;
+            box-shadow: 0 16px 40px rgba(15,23,42,0.9);
+        }
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.82rem !important;
+            color: #e5e7eb !important;
+            white-space: normal !important;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.55rem !important;
+            color: #f9fafb !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+        }
+        .info-box {
+            background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
+            border-left: 4px solid #3b82f6;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #e5e7eb;
+        }
+        .success-box {
+            background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
+            border-left: 4px solid #22c55e;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #dcfce7;
+        }
+        .warning-box {
+            background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
+            border-left: 4px solid #eab308;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #fef9c3;
+        }
+        .danger-box {
+            background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
+            border-left: 4px solid #ef4444;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            color: #fee2e2;
+        }
+        div[data-testid="stDataFrame"] {
+            border-radius: 14px;
+            border: 1px solid rgba(148,163,184,0.35);
+            overflow: hidden;
+            box-shadow: 0 14px 36px rgba(15,23,42,0.65);
+        }
+        div[data-testid="stDataFrame"] thead tr th {
+            background: linear-gradient(135deg, rgba(99,102,241,0.35), rgba(2,6,23,0.95)) !important;
+            color: #f8fafc !important;
+            font-weight: 700 !important;
+            border-bottom: 1px solid rgba(148,163,184,0.35) !important;
+        }
+        div[data-testid="stDataFrame"] tbody tr td {
+            color: #e5e7eb !important;
+            background: rgba(2,6,23,0.65) !important;
+            border-bottom: 1px solid rgba(148,163,184,0.14) !important;
+        }
+        </style>
+        """
+
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -333,7 +446,6 @@ def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     )
 
     def m(x):
-        # lower-key -> original
         return col_map.get(x, "") if x else ""
 
     return {
@@ -373,7 +485,6 @@ class CompleteAnalyzer:
         self.df = self._prepare(raw_df)
 
     def _col(self, detected: Dict[str, str], key: str) -> str:
-        # override if provided and exists in df columns
         ov = safe_str(self.column_overrides.get(key, ""), "").strip()
         if ov:
             return ov
@@ -656,10 +767,6 @@ class CompleteAnalyzer:
         return pd.DataFrame(rows)
 
     def placement_recommendations(self) -> Dict:
-        """
-        Search term reports usually do NOT include placement.
-        If your file includes placement column, we show summary + recs.
-        """
         res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
 
         if self.df is None or len(self.df) == 0:
@@ -692,7 +799,8 @@ class CompleteAnalyzer:
 
         g["ROAS"] = g.apply(lambda r: (r["Sales"] / r["Spend"]) if r["Spend"] > 0 else 0.0, axis=1)
         g["ACOS"] = g.apply(
-            lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0, axis=1
+            lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0,
+            axis=1,
         )
 
         ta = self.target_acos or 30.0
@@ -737,6 +845,19 @@ class CompleteAnalyzer:
         res["recs"] = recs
         return res
 
+    # New helper: top wastage rows for dashboard and export
+    def top_wastage(self, n: int = 50, min_spend: float = 0.0) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[df["Wastage"] > 0]
+        if min_spend is not None and min_spend > 0:
+            df = df[df["Spend"] >= float(min_spend)]
+        df = df.sort_values("Wastage", ascending=False)
+        if n is not None and n > 0:
+            df = df.head(n)
+        return df
+
 
 # -----------------------------------------------------------------------------
 # App state
@@ -760,15 +881,15 @@ def init_session():
     if "active_client" not in st.session_state:
         st.session_state.active_client = None
     if "debug" not in st.session_state:
-        st.session_state.debug = True  # keep ON so you can see column mapping
+        st.session_state.debug = True
 
 
 def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.3</h1>
-            <p>Big-date Sales fixed • Column Override • Reset button • Premium UI</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.4</h1>
+            <p>Big-date Sales • Column Override • Wastage hotspots • Premium UI</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -851,8 +972,8 @@ def sidebar():
                 )
 
                 st.caption(
-                    "Tip: For your file, Sales should be like '14 Day Total Sales (₹)' "
-                    "and Orders like '14 Day Total Orders (#)'."
+                    "Tip: For your file, Sales should be like '14 Day Total Sales (₹)' and "
+                    "Orders like '14 Day Total Orders (#)'."
                 )
 
             if st.button("✅ Create / Update", use_container_width=True):
@@ -936,7 +1057,7 @@ def dashboard_page(cl: ClientData):
         f"""
         <div class="danger-box">
             <strong>Wastage (zero‑sales spend)</strong><br>
-            {format_currency(s["wastage"])} ({wp:.1f}%)
+            {format_currency(s["wastage"])} ({wp:.1f}% of spend)
         </div>
         """,
         unsafe_allow_html=True,
@@ -959,7 +1080,7 @@ def dashboard_page(cl: ClientData):
         dfp["Sales"] = dfp["Sales"].apply(format_currency)
         dfp["ROAS"] = dfp["ROAS"].apply(lambda x: f"{float(x):.2f}x")
         dfp["ACOS"] = dfp["ACOS"].apply(lambda x: f"{float(x):.1f}%")
-        show_df(dfp, height=280)
+        show_df(dfp, height=260)
 
         for r in plac["recs"]:
             box = (
@@ -973,6 +1094,43 @@ def dashboard_page(cl: ClientData):
             )
     else:
         st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
+
+    # New: Wastage hotspot table
+    st.subheader("🔥 Wastage hotspots (zero‑sales spend terms)")
+    min_spend = st.slider(
+        "Minimum spend to include (₹)",
+        min_value=0,
+        max_value=1000,
+        value=50,
+        step=10,
+    )
+    top_n = st.selectbox("Max rows", [20, 50, 100], index=1)
+
+    wdf = an.top_wastage(n=top_n, min_spend=min_spend)
+    if wdf.empty:
+        st.info("No wastage rows with the selected filters.")
+    else:
+        view = wdf[
+            [
+                "Customer Search Term",
+                "Campaign Name",
+                "Match Type",
+                "Spend",
+                "Wastage",
+                "Clicks",
+                "Impressions",
+                "Sales",
+                "Orders",
+                "ACOS",
+                "ROAS",
+            ]
+        ].copy()
+        view["Spend"] = view["Spend"].apply(format_currency)
+        view["Wastage"] = view["Wastage"].apply(format_currency)
+        view["Sales"] = view["Sales"].apply(format_currency)
+        view["ACOS"] = view["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        view["ROAS"] = view["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        show_df(view, height=320)
 
 
 def keywords_page(cl: ClientData):
@@ -989,6 +1147,10 @@ def keywords_page(cl: ClientData):
     c3.metric("👀 Watch", len(cats["watch"]))
     c4.metric("⚠️ Reduce", len(cats["reduce"]))
     c5.metric("🚨 Pause", len(cats["pause"]))
+
+    st.caption(
+        "Categories are based on spend, ROAS, orders and ACOS so you can skim winners, tests, and drains quickly."
+    )
 
     tabs = st.tabs(
         [
@@ -1065,6 +1227,7 @@ def exports_page(cl: ClientData):
         else:
             st.info("No bid suggestions to export.")
 
+    # Clean dataset export
     csv = an.df.to_csv(index=False)
     st.download_button(
         f"Download cleaned dataset CSV ({len(an.df)} rows)",
@@ -1073,6 +1236,18 @@ def exports_page(cl: ClientData):
         mime="text/csv",
         use_container_width=True,
     )
+
+    # New: wastage-only export
+    wdf = an.top_wastage(n=None, min_spend=0.0)
+    if not wdf.empty:
+        wcsv = wdf.to_csv(index=False)
+        st.download_button(
+            f"Download wastage-only CSV ({len(wdf)} rows)",
+            data=wcsv,
+            file_name=f"Wastage_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 
 # -----------------------------------------------------------------------------
