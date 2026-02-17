@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v7.5
+Amazon Ads Dashboard Pro v7.6
 
-Changes vs v7.4:
-1) Target ACOS % and Target ROAS are optional (just defaults).
-2) Upload is required only when CREATING a new client.
-   For existing clients, you can update just targets without re-uploading.
-3) Theme-aware styling for light/dark Streamlit themes.
-4) Wastage hotspots section + wastage-only CSV export.
+Changes vs v7.5:
+1) Wastage definition fixed: Spend on search terms with ZERO ORDERS is counted as wastage.
+   (This matches common Amazon PPC audit practice: high spend + 0 conversions = wasted spend.)
+2) Wastage hotspots section + explicit wastage-only CSV export remain.
+3) Targets (ACOS/ROAS) are optional; upload is only required when creating a new client.
+4) Theme-aware styling for light/dark Streamlit themes.
 """
 
 import io
@@ -60,7 +60,7 @@ def get_excel_writer_engine(preferred: str = "xlsxwriter") -> str:
 
 def load_custom_css():
     """
-    Use Streamlit theme context to switch between light and dark styling. [web:26][web:27]
+    Use Streamlit theme context to switch between light and dark styling.
     """
     theme_type = "dark"
     try:
@@ -546,7 +546,14 @@ class CompleteAnalyzer:
             raise ValueError("No valid rows after filtering (Spend/Clicks are all 0).")
 
         out["Profit"] = out["Sales"] - out["Spend"]
-        out["Wastage"] = out.apply(lambda r: float(r["Spend"]) if float(r["Sales"]) == 0 else 0.0, axis=1)
+
+        # FIXED: Wastage = Spend for rows with ZERO ORDERS (i.e., zero conversions), else 0.
+        # This matches how Amazon PPC wasted spend is usually calculated. [web:42][web:46][web:52][web:50]
+        out["Wastage"] = out.apply(
+            lambda r: float(r["Spend"]) if float(r["Orders"]) == 0 else 0.0,
+            axis=1,
+        )
+
         out["CVR"] = out.apply(
             lambda r: (float(r["Orders"]) / float(r["Clicks"]) * 100) if float(r["Clicks"]) > 0 else 0.0,
             axis=1,
@@ -884,7 +891,7 @@ def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.5</h1>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.6</h1>
             <p>Big-date Sales • Column Override • Wastage hotspots • Premium UI</p>
         </div>
         """,
@@ -1003,7 +1010,6 @@ def sidebar():
 
                 try:
                     if up is not None:
-                        # Create or refresh from uploaded file
                         df = read_uploaded_report(up)
                         cl = current_client or ClientData(nm)
                         cl.target_acos = float(t_acos) if t_acos > 0 else None
@@ -1022,7 +1028,6 @@ def sidebar():
                         st.session_state.active_client = nm
                         st.success("Client created/updated from uploaded report.")
                     else:
-                        # Existing client, updating targets only
                         if current_client is None:
                             st.error("No existing client found with this name.")
                             return
@@ -1088,7 +1093,7 @@ def dashboard_page(cl: ClientData):
     st.markdown(
         f"""
         <div class="danger-box">
-            <strong>Wastage (zero‑sales spend)</strong><br>
+            <strong>Wastage (zero‑order spend)</strong><br>
             {format_currency(s["wastage"])} ({wp:.1f}% of spend)
         </div>
         """,
@@ -1127,7 +1132,7 @@ def dashboard_page(cl: ClientData):
     else:
         st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
 
-    st.subheader("🔥 Wastage hotspots (zero‑sales spend terms)")
+    st.subheader("🔥 Wastage hotspots (zero‑order spend terms)")
     min_spend = st.slider(
         "Minimum spend to include (₹)",
         min_value=0,
@@ -1258,6 +1263,7 @@ def exports_page(cl: ClientData):
         else:
             st.info("No bid suggestions to export.")
 
+    # Clean dataset export
     csv = an.df.to_csv(index=False)
     st.download_button(
         f"Download cleaned dataset CSV ({len(an.df)} rows)",
@@ -1267,6 +1273,7 @@ def exports_page(cl: ClientData):
         use_container_width=True,
     )
 
+    # Wastage-only export (all zero-order spend rows)
     wdf = an.top_wastage(n=None, min_spend=0.0)
     if not wdf.empty:
         wcsv = wdf.to_csv(index=False)
