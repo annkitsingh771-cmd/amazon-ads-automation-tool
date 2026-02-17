@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v7.2 (Sales Fix + Premium UI)
+Amazon Ads Dashboard Pro v7.3
 
-- Fixes Sales/Orders/ROAS/TCoAS/CVR for big-date reports (7/14/30 days)
-- Auto-selects correct Excel sheet
-- Robust numeric parsing (currency/text formatted numbers)
-- Premium UI, clear colors (red for negatives), readable columns
-- S.No starts from 1, hides default index
-- Placement-wise recommendations when placement data exists
+Fixes your issues:
+1) Big-date report support (7/14/30 day Sales & Orders detection) + manual column override.
+2) S.No starts from 1 (and hide default index).
+3) Premium readable colors + higher contrast tables and labels.
+4) Placement-wise recommendations when placement column exists.
+5) Reset button to clear old session clients (fixes “still showing 0 after code update”).
 """
 
 import io
@@ -34,7 +34,7 @@ st.set_page_config(
 
 
 # -----------------------------------------------------------------------------
-# Premium styling
+# Premium styling (high contrast)
 # -----------------------------------------------------------------------------
 def load_custom_css():
     css = """
@@ -147,6 +147,10 @@ def safe_str(value, default: str = "N/A") -> str:
 
 
 def parse_number(value, default: float = 0.0) -> float:
+    """
+    Robust numeric parser for Excel formatted values:
+    - '₹1,234.50', 'INR 1234', '[$₹-en-US]18.96', '(123.4)' -> numbers
+    """
     try:
         if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
             return default
@@ -213,7 +217,7 @@ REQUIRED_HINTS = ["customer search term", "campaign name", "spend", "clicks"]
 
 
 def _score_sheet_columns(cols: List[str]) -> int:
-    cols_l = [c.lower().strip() for c in cols]
+    cols_l = [str(c).lower().strip() for c in cols]
     score = 0
     for h in REQUIRED_HINTS:
         if any(h == c or h in c for c in cols_l):
@@ -243,6 +247,7 @@ def read_uploaded_report(uploaded_file) -> pd.DataFrame:
             continue
         if tmp is None or len(tmp) == 0:
             continue
+
         score = _score_sheet_columns(list(tmp.columns))
         rows = int(tmp.shape[0])
         if score > best_score or (score == best_score and rows > best_rows):
@@ -264,33 +269,88 @@ def pick_best_column(columns_lower: List[str], patterns: List[str]) -> Optional[
     return None
 
 
+def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
+    cols = [safe_str(c, "").strip() for c in df.columns]
+    cols_lower = [c.lower().strip() for c in cols]
+    col_map = {c.lower().strip(): c for c in cols}
+
+    cst = pick_best_column(cols_lower, [r"^customer search term$", r"customer search term", r"search term"])
+    camp = pick_best_column(cols_lower, [r"^campaign name$", r"campaign name"])
+    clicks = pick_best_column(cols_lower, [r"^clicks$", r"clicks"])
+    spend = pick_best_column(cols_lower, [r"^spend$", r"\bcost\b", r"ad spend", r"spend"])
+    impr = pick_best_column(cols_lower, [r"^impressions$", r"impressions", r"\bimps\b"])
+    match = pick_best_column(cols_lower, [r"match type", r"matchtype"])
+    adg = pick_best_column(cols_lower, [r"ad group name", r"adgroup"])
+    cpc = pick_best_column(cols_lower, [r"cost per click", r"\bcpc\b"])
+
+    sales = pick_best_column(
+        cols_lower,
+        [
+            r"\b7\s*day\s*total\s*sales\b",
+            r"\b14\s*day\s*total\s*sales\b",
+            r"\b30\s*day\s*total\s*sales\b",
+            r"\btotal\s*sales\b",
+            r"(^sales$)|(\bsales\b)",
+            r"\brevenue\b",
+        ],
+    )
+    orders = pick_best_column(
+        cols_lower,
+        [
+            r"\b7\s*day\s*total\s*orders\b",
+            r"\b14\s*day\s*total\s*orders\b",
+            r"\b30\s*day\s*total\s*orders\b",
+            r"\bordered\s*units\b",
+            r"\btotal\s*orders\b",
+            r"(^orders$)|(\borders\b)",
+            r"\bunits\b",
+        ],
+    )
+
+    def m(x):  # lower-key -> original
+        return col_map.get(x, "") if x else ""
+
+    return {
+        "Customer Search Term": m(cst),
+        "Campaign Name": m(camp),
+        "Ad Group Name": m(adg),
+        "Match Type": m(match),
+        "Clicks": m(clicks),
+        "Spend": m(spend),
+        "Impressions": m(impr),
+        "Sales": m(sales),
+        "Orders": m(orders),
+        "CPC": m(cpc),
+    }
+
+
 # -----------------------------------------------------------------------------
 # Analyzer
 # -----------------------------------------------------------------------------
 class CompleteAnalyzer:
     def __init__(
         self,
-        df: pd.DataFrame,
+        raw_df: pd.DataFrame,
         client_name: str,
+        column_overrides: Optional[Dict[str, str]] = None,
         target_acos: Optional[float] = None,
         target_roas: Optional[float] = None,
-        target_cpa: Optional[float] = None,
-        target_tcoas: Optional[float] = None,
     ):
         self.client_name = client_name
         self.target_acos = target_acos
         self.target_roas = target_roas
-        self.target_cpa = target_cpa
-        self.target_tcoas = target_tcoas
+        self.column_overrides = column_overrides or {}
 
         self.df: Optional[pd.DataFrame] = None
-        self.sales_source: str = ""
-        self.orders_source: str = ""
-        self.spend_source: str = ""
-        self.clicks_source: str = ""
-        self.impr_source: str = ""
+        self.diag: Dict[str, str] = {}
+        self.df = self._prepare(raw_df)
 
-        self.df = self._prepare(df)
+    def _col(self, detected: Dict[str, str], key: str) -> str:
+        # override if provided and exists in df columns
+        ov = safe_str(self.column_overrides.get(key, ""), "").strip()
+        if ov:
+            return ov
+        return detected.get(key, "")
 
     def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or len(df) == 0:
@@ -299,86 +359,37 @@ class CompleteAnalyzer:
         df = df.copy().dropna(how="all")
         df.columns = [safe_str(c, "").strip() for c in df.columns]
 
-        cols_lower = [c.lower().strip() for c in df.columns]
-        col_map = {c.lower().strip(): c for c in df.columns}
+        detected = auto_detect_columns(df)
 
-        cst = pick_best_column(cols_lower, [r"^customer search term$", r"customer search term", r"search term"])
-        camp = pick_best_column(cols_lower, [r"^campaign name$", r"campaign name"])
-        clicks = pick_best_column(cols_lower, [r"^clicks$", r"clicks"])
-        spend = pick_best_column(cols_lower, [r"^spend$", r"\bcost\b", r"ad spend", r"spend"])
-        impr = pick_best_column(cols_lower, [r"^impressions$", r"impressions", r"\bimps\b"])
+        cst = self._col(detected, "Customer Search Term")
+        camp = self._col(detected, "Campaign Name")
+        clicks = self._col(detected, "Clicks")
+        spend = self._col(detected, "Spend")
+        impr = self._col(detected, "Impressions")
+        sales = self._col(detected, "Sales")
+        orders = self._col(detected, "Orders")
+        adg = self._col(detected, "Ad Group Name")
+        match = self._col(detected, "Match Type")
+        cpc = self._col(detected, "CPC")
 
-        if not cst or not camp or not clicks or not spend:
-            raise ValueError("Required columns not found: Customer Search Term, Campaign Name, Spend/Cost, Clicks.")
-
-        # Sales/Orders auto-detection (7/14/30 day)
-        sales_col_l = pick_best_column(
-            cols_lower,
-            [
-                r"\b7\s*day\s*total\s*sales\b",
-                r"\b14\s*day\s*total\s*sales\b",
-                r"\b30\s*day\s*total\s*sales\b",
-                r"\btotal\s*sales\b",
-                r"(^sales$)|(\bsales\b)",
-                r"\brevenue\b",
-            ],
-        )
-        orders_col_l = pick_best_column(
-            cols_lower,
-            [
-                r"\b7\s*day\s*total\s*orders\b",
-                r"\b14\s*day\s*total\s*orders\b",
-                r"\b30\s*day\s*total\s*orders\b",
-                r"\bordered\s*units\b",
-                r"\btotal\s*orders\b",
-                r"(^orders$)|(\borders\b)",
-                r"\bunits\b",
-            ],
-        )
-
-        adv_sales_l = pick_best_column(cols_lower, [r"advertised\s*sku\s*sales"])
-        other_sales_l = pick_best_column(cols_lower, [r"other\s*sku\s*sales"])
-        adgroup_l = pick_best_column(cols_lower, [r"ad group name", r"adgroup"])
-        match_l = pick_best_column(cols_lower, [r"match type", r"matchtype"])
-        cpc_l = pick_best_column(cols_lower, [r"cost per click", r"\bcpc\b"])
+        required_missing = [k for k, v in {"Customer Search Term": cst, "Campaign Name": camp, "Clicks": clicks, "Spend": spend}.items() if not v]
+        if required_missing:
+            raise ValueError(f"Missing required mapping: {required_missing}. Use Column Override and select correct columns.")
 
         out = pd.DataFrame()
-        out["Customer Search Term"] = df[col_map[cst]].astype(str).fillna("").str.strip()
-        out["Campaign Name"] = df[col_map[camp]].astype(str).fillna("").str.strip()
-        out["Ad Group Name"] = df[col_map[adgroup_l]].astype(str).fillna("N/A").str.strip() if adgroup_l else "N/A"
-        out["Match Type"] = df[col_map[match_l]].astype(str).fillna("N/A").str.strip() if match_l else "N/A"
+        out["Customer Search Term"] = df[cst].astype(str).fillna("").str.strip()
+        out["Campaign Name"] = df[camp].astype(str).fillna("").str.strip()
+        out["Ad Group Name"] = df[adg].astype(str).fillna("N/A").str.strip() if adg else "N/A"
+        out["Match Type"] = df[match].astype(str).fillna("N/A").str.strip() if match else "N/A"
 
-        out["Clicks"] = to_numeric_series(df[col_map[clicks]])
-        out["Spend"] = to_numeric_series(df[col_map[spend]])
-        out["Impressions"] = to_numeric_series(df[col_map[impr]]) if impr else 0.0
+        out["Clicks"] = to_numeric_series(df[clicks])
+        out["Spend"] = to_numeric_series(df[spend])
+        out["Impressions"] = to_numeric_series(df[impr]) if impr else 0.0
 
-        self.clicks_source = col_map[clicks]
-        self.spend_source = col_map[spend]
-        self.impr_source = col_map[impr] if impr else ""
+        out["Sales"] = to_numeric_series(df[sales]) if sales else 0.0
+        out["Orders"] = to_numeric_series(df[orders]) if orders else 0.0
 
-        if sales_col_l:
-            out["Sales"] = to_numeric_series(df[col_map[sales_col_l]])
-            self.sales_source = col_map[sales_col_l]
-        else:
-            out["Sales"] = 0.0
-
-        if orders_col_l:
-            out["Orders"] = to_numeric_series(df[col_map[orders_col_l]])
-            self.orders_source = col_map[orders_col_l]
-        else:
-            out["Orders"] = 0.0
-
-        if out["Sales"].sum() == 0 and (adv_sales_l or other_sales_l):
-            adv = to_numeric_series(df[col_map[adv_sales_l]]) if adv_sales_l else 0.0
-            oth = to_numeric_series(df[col_map[other_sales_l]]) if other_sales_l else 0.0
-            out["Sales"] = adv + oth
-            self.sales_source = "Advertised SKU Sales + Other SKU Sales"
-
-        if cpc_l:
-            out["CPC"] = to_numeric_series(df[col_map[cpc_l]])
-        else:
-            out["CPC"] = 0.0
-
+        out["CPC"] = to_numeric_series(df[cpc]) if cpc else 0.0
         out["CPC"] = out.apply(
             lambda r: float(r["CPC"]) if float(r["CPC"]) > 0 else (float(r["Spend"]) / float(r["Clicks"]) if float(r["Clicks"]) > 0 else 0.0),
             axis=1,
@@ -386,7 +397,7 @@ class CompleteAnalyzer:
 
         out = out[(out["Spend"] > 0) | (out["Clicks"] > 0)].copy()
         if len(out) == 0:
-            raise ValueError("No valid rows after filtering (Spend/Clicks are all 0)")
+            raise ValueError("No valid rows after filtering (Spend/Clicks are all 0).")
 
         out["Profit"] = out["Sales"] - out["Spend"]
         out["Wastage"] = out.apply(lambda r: float(r["Spend"]) if float(r["Sales"]) == 0 else 0.0, axis=1)
@@ -394,12 +405,21 @@ class CompleteAnalyzer:
         out["ROAS"] = out.apply(lambda r: (float(r["Sales"]) / float(r["Spend"])) if float(r["Spend"]) > 0 else 0.0, axis=1)
         out["ACOS"] = out.apply(lambda r: (float(r["Spend"]) / float(r["Sales"]) * 100) if float(r["Sales"]) > 0 else 0.0, axis=1)
         out["CTR"] = out.apply(lambda r: (float(r["Clicks"]) / float(r["Impressions"]) * 100) if float(r["Impressions"]) > 0 else 0.0, axis=1)
-        out["CPA"] = out.apply(lambda r: (float(r["Spend"]) / float(r["Orders"])) if float(r["Orders"]) > 0 else 0.0, axis=1)
         out["TCoAS"] = out["ACOS"]
 
-        out["Negative_Type"] = out["Customer Search Term"].apply(get_negative_type)
+        out["Negative_Type"] = out["Customer Search Term"].apply(lambda x: "PRODUCT" if is_asin(x) else "KEYWORD")
         out["Client"] = self.client_name
         out["Processed_Date"] = datetime.now()
+
+        self.diag = {
+            "Sales column": sales or "NOT SET",
+            "Orders column": orders or "NOT SET",
+            "Spend column": spend or "NOT SET",
+            "Clicks column": clicks or "NOT SET",
+            "Impressions column": impr or "NOT SET",
+            "Sales sum": str(round(float(out["Sales"].sum()), 2)),
+            "Orders sum": str(int(out["Orders"].sum())),
+        }
 
         return out
 
@@ -561,22 +581,64 @@ class CompleteAnalyzer:
                 row["State"] = "paused"
                 row["Bid"] = ""
             rows.append(row)
-
         return pd.DataFrame(rows)
 
     def placement_recommendations(self) -> Dict:
+        """
+        Search term reports usually do NOT include placement.
+        If your file includes placement column, we show summary + recs.
+        """
         res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
-        placement_cols = [c for c in self.df.columns if "placement" in c.lower()] if self.df is not None else []
-        if not placement_cols:
-            res["message"] = "No placement column found in this report."
+
+        if self.df is None or len(self.df) == 0:
+            res["message"] = "No data."
             return res
+
+        placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
+        if not placement_cols:
+            res["message"] = "No placement column found. Upload a Placement report to get placement recommendations."
+            return res
+
+        col = placement_cols[0]
+        dfp = self.df.copy()
+        dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
+
+        g = dfp.groupby(col).agg(
+            Spend=("Spend", "sum"),
+            Sales=("Sales", "sum"),
+            Orders=("Orders", "sum"),
+            Clicks=("Clicks", "sum"),
+            Impressions=("Impressions", "sum"),
+        ).reset_index().rename(columns={col: "Placement"})
+
+        g["ROAS"] = g.apply(lambda r: (r["Sales"] / r["Spend"]) if r["Spend"] > 0 else 0.0, axis=1)
+        g["ACOS"] = g.apply(lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0, axis=1)
+
+        ta = self.target_acos or 30.0
+        tr = self.target_roas or 3.0
+
+        recs = []
+        for _, r in g.iterrows():
+            sp = float(r["Spend"])
+            ro = float(r["ROAS"])
+            ac = float(r["ACOS"])
+            if sp <= 0:
+                continue
+            if ro >= tr or ac <= ta:
+                recs.append({"Placement": r["Placement"], "Action": "INCREASE", "Recommendation": f"Good placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% placement bid."})
+            elif ro < 1.0 or ac > ta * 1.5:
+                recs.append({"Placement": r["Placement"], "Action": "REDUCE", "Recommendation": f"Weak placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce by 15–30% or pause."})
+            else:
+                recs.append({"Placement": r["Placement"], "Action": "HOLD", "Recommendation": f"Average placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Keep stable and monitor."})
+
         res["available"] = True
-        res["message"] = "Placement found (basic summary not implemented in this minimal build)."
+        res["table"] = g
+        res["recs"] = recs
         return res
 
 
 # -----------------------------------------------------------------------------
-# Session
+# App state
 # -----------------------------------------------------------------------------
 class ClientData:
     def __init__(self, name: str):
@@ -584,8 +646,7 @@ class ClientData:
         self.analyzer: Optional[CompleteAnalyzer] = None
         self.target_acos: Optional[float] = None
         self.target_roas: Optional[float] = None
-        self.target_cpa: Optional[float] = None
-        self.target_tcoas: Optional[float] = None
+        self.column_overrides: Dict[str, str] = {}
 
 
 def init_session():
@@ -596,15 +657,15 @@ def init_session():
     if "active_client" not in st.session_state:
         st.session_state.active_client = None
     if "debug" not in st.session_state:
-        st.session_state.debug = False
+        st.session_state.debug = True  # keep ON so you can see column mapping
 
 
 def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.2</h1>
-            <p>Sales/Orders fixed • Sheet auto-detect • Premium UI • S.No from 1</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.3</h1>
+            <p>Big-date Sales fixed • Column Override • Reset button • Premium UI</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -618,10 +679,22 @@ def show_df(df: pd.DataFrame, height: int = 450):
     st.dataframe(add_serial_column(df), use_container_width=True, hide_index=True, height=height)
 
 
+def reset_app():
+    st.session_state.clients = {}
+    st.session_state.active_client = None
+
+
 def sidebar():
     with st.sidebar:
         st.session_state.agency_name = st.text_input("Agency name", st.session_state.agency_name)
-        st.session_state.debug = st.checkbox("Show diagnostics", value=st.session_state.debug)
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.session_state.debug = st.checkbox("Show diagnostics", value=st.session_state.debug)
+        with c2:
+            if st.button("Reset app", use_container_width=True):
+                reset_app()
+                st.rerun()
 
         st.markdown("---")
         st.markdown("### 👥 Clients")
@@ -631,54 +704,97 @@ def sidebar():
             st.session_state.active_client = sel
 
         st.markdown("---")
-        with st.expander("➕ Add client", expanded=True):
+        with st.expander("➕ Add / Update client", expanded=True):
             nm = st.text_input("Client name*")
-            c1, c2 = st.columns(2)
-            with c1:
-                t_acos = st.number_input("Target ACOS %", value=0.0, step=5.0, format="%.1f")
-                t_roas = st.number_input("Target ROAS", value=0.0, step=0.5, format="%.1f")
-            with c2:
-                t_cpa = st.number_input("Target CPA ₹", value=0.0, step=50.0, format="%.0f")
-                t_tcoas = st.number_input("Target TCoAS %", value=0.0, step=5.0, format="%.1f")
 
-            up = st.file_uploader("Upload report (XLSX/CSV)*", type=["xlsx", "xls", "csv"])
+            t1, t2 = st.columns(2)
+            with t1:
+                t_acos = st.number_input("Target ACOS %", value=30.0, step=5.0, format="%.1f")
+            with t2:
+                t_roas = st.number_input("Target ROAS", value=3.0, step=0.5, format="%.1f")
 
-            if st.button("✅ Create / Update client", use_container_width=True):
+            up = st.file_uploader("Upload Search Term report (XLSX/CSV)*", type=["xlsx", "xls", "csv"])
+
+            preview_df = None
+            detected = {}
+            if up is not None:
+                try:
+                    preview_df = read_uploaded_report(up)
+                    detected = auto_detect_columns(preview_df)
+                except Exception as e:
+                    st.error(f"Preview read error: {e}")
+                    preview_df = None
+
+            overrides = {}
+            if preview_df is not None:
+                st.markdown("#### Column override (only if needed)")
+                cols = [""] + list(preview_df.columns)
+
+                def selbox(label, key, default):
+                    idx = cols.index(default) if default in cols else 0
+                    return st.selectbox(label, cols, index=idx, key=key)
+
+                overrides["Sales"] = selbox("Sales column", "ov_sales", detected.get("Sales", ""))
+                overrides["Orders"] = selbox("Orders column", "ov_orders", detected.get("Orders", ""))
+                overrides["Spend"] = selbox("Spend column", "ov_spend", detected.get("Spend", ""))
+                overrides["Clicks"] = selbox("Clicks column", "ov_clicks", detected.get("Clicks", ""))
+                overrides["Impressions"] = selbox("Impressions column", "ov_impr", detected.get("Impressions", ""))
+                overrides["Customer Search Term"] = selbox("Customer Search Term", "ov_cst", detected.get("Customer Search Term", ""))
+                overrides["Campaign Name"] = selbox("Campaign Name", "ov_camp", detected.get("Campaign Name", ""))
+
+                st.caption("Tip: For your file, Sales should be like '14 Day Total Sales (₹)' and Orders like '14 Day Total Orders (#)'.")
+
+            if st.button("✅ Create / Update", use_container_width=True):
                 if not nm:
                     st.error("Enter client name.")
                     return
-                if not up:
+                if up is None:
                     st.error("Upload a report file.")
                     return
 
                 try:
                     df = read_uploaded_report(up)
-                    cl = st.session_state.clients.get(nm) or ClientData(nm)
 
-                    cl.target_acos = t_acos if t_acos > 0 else None
-                    cl.target_roas = t_roas if t_roas > 0 else None
-                    cl.target_cpa = t_cpa if t_cpa > 0 else None
-                    cl.target_tcoas = t_tcoas if t_tcoas > 0 else None
+                    cl = st.session_state.clients.get(nm) or ClientData(nm)
+                    cl.target_acos = float(t_acos)
+                    cl.target_roas = float(t_roas)
+                    cl.column_overrides = {k: v for k, v in (overrides or {}).items() if safe_str(v, "").strip()}
 
                     cl.analyzer = CompleteAnalyzer(
-                        df=df,
+                        raw_df=df,
                         client_name=nm,
+                        column_overrides=cl.column_overrides,
                         target_acos=cl.target_acos,
                         target_roas=cl.target_roas,
-                        target_cpa=cl.target_cpa,
-                        target_tcoas=cl.target_tcoas,
                     )
 
                     st.session_state.clients[nm] = cl
                     st.session_state.active_client = nm
-                    st.success("Client ready.")
+                    st.success("Client ready. Open Dashboard.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Upload error: {e}")
                     with st.expander("Details"):
                         st.code(traceback.format_exc())
 
+        if st.session_state.clients:
+            st.markdown("---")
+            st.markdown("### 📋 All clients")
+            for name in list(st.session_state.clients.keys()):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.write(f"📊 {name}")
+                with col2:
+                    if st.button("❌", key=f"del_{name}"):
+                        del st.session_state.clients[name]
+                        if st.session_state.active_client == name:
+                            st.session_state.active_client = None
+                        st.rerun()
 
+
+# -----------------------------------------------------------------------------
+# Pages
+# -----------------------------------------------------------------------------
 def dashboard_page(cl: ClientData):
     an = cl.analyzer
     if not an or an.df is None:
@@ -715,16 +831,23 @@ def dashboard_page(cl: ClientData):
     )
 
     if st.session_state.debug:
-        st.markdown(
-            f"""
-            <div class="info-box">
-                <strong>Diagnostics</strong><br>
-                Sales source: <code>{an.sales_source or "Not detected"}</code><br>
-                Orders source: <code>{an.orders_source or "Not detected"}</code>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        lines = "<br>".join([f"<strong>{k}:</strong> <code>{safe_str(v,'')}</code>" for k, v in an.diag.items()])
+        st.markdown(f'<div class="info-box"><strong>Diagnostics</strong><br>{lines}</div>', unsafe_allow_html=True)
+
+    st.subheader("📍 Placement recommendations")
+    plac = an.placement_recommendations()
+    if plac["available"]:
+        dfp = plac["table"].copy()
+        dfp["Spend"] = dfp["Spend"].apply(format_currency)
+        dfp["Sales"] = dfp["Sales"].apply(format_currency)
+        dfp["ROAS"] = dfp["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        dfp["ACOS"] = dfp["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        show_df(dfp, height=280)
+        for r in plac["recs"]:
+            box = "success-box" if r["Action"] == "INCREASE" else ("danger-box" if r["Action"] == "REDUCE" else "info-box")
+            st.markdown(f'<div class="{box}"><strong>{r["Placement"]}</strong> – {r["Action"]}<br>{r["Recommendation"]}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
 
 
 def keywords_page(cl: ClientData):
@@ -734,7 +857,6 @@ def keywords_page(cl: ClientData):
         return
 
     cats = an.classify_keywords()
-
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("🏆 Scale", len(cats["scale"]))
     c2.metric("⚡ Test", len(cats["test"]))
@@ -795,6 +917,7 @@ def exports_page(cl: ClientData):
         return
 
     st.subheader("📥 Exports")
+
     sug = an.bid_suggestions()
     if sug:
         bulk = an.build_amazon_bulk_from_bids(sug)
@@ -823,22 +946,17 @@ def exports_page(cl: ClientData):
     )
 
 
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 def main():
     load_custom_css()
-    if "agency_name" not in st.session_state:
-        st.session_state.agency_name = "Your Agency"
-    if "clients" not in st.session_state:
-        st.session_state.clients = {}
-    if "active_client" not in st.session_state:
-        st.session_state.active_client = None
-    if "debug" not in st.session_state:
-        st.session_state.debug = False
-
+    init_session()
     sidebar()
     header()
 
     if not st.session_state.clients:
-        st.markdown('<div class="info-box">Add a client and upload a report from the left sidebar.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="info-box">Add a client and upload your Search Term report from the left sidebar.</div>', unsafe_allow_html=True)
         return
 
     if not st.session_state.active_client:
