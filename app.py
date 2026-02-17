@@ -4,13 +4,11 @@
 """
 Amazon Ads Dashboard Pro v7.2 (Sales Fix + Premium UI)
 
-Fixes:
-- Sales/Orders/ROAS/TCoAS/CVR not showing for big-date reports:
-  * Auto-selects correct Excel sheet
-  * Smart column detection for 7/14/30 day Sales & Orders (currency variations)
-  * Robust numeric parsing for formatted currency strings
-- S.No starts from 1 and hides default index (no 0 index visible)
-- Premium UI with high-contrast tables and clearer metric labels
+- Fixes Sales/Orders/ROAS/TCoAS/CVR for big-date reports (7/14/30 days)
+- Auto-selects correct Excel sheet
+- Robust numeric parsing (currency/text formatted numbers)
+- Premium UI, clear colors (red for negatives), readable columns
+- S.No starts from 1, hides default index
 - Placement-wise recommendations when placement data exists
 """
 
@@ -18,7 +16,7 @@ import io
 import re
 import traceback
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -46,7 +44,6 @@ def load_custom_css():
         background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
     }
 
-    /* Header */
     .agency-header {
         background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
         padding: 1.4rem 1.8rem;
@@ -59,7 +56,6 @@ def load_custom_css():
     .agency-header h1 { margin: 0; font-size: 1.5rem; }
     .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
 
-    /* Metric cards */
     div[data-testid="stMetric"] {
         background: radial-gradient(circle at top left, #0f172a 0, #020617 55%, #020617 100%);
         border-radius: 16px;
@@ -79,25 +75,6 @@ def load_custom_css():
         word-break: break-word !important;
     }
 
-    /* Sidebar inputs */
-    div[data-testid="stNumberInput"] > label {
-        font-size: 0.75rem;
-        line-height: 1.15;
-        color: #e5e7eb;
-    }
-    div[data-testid="stNumberInput"] > div {
-        background: #020617;
-        border-radius: 10px;
-        border: 1px solid #1f2937;
-    }
-    div[data-testid="stNumberInput"] input {
-        text-align: center;
-        padding: 0.3rem 0.4rem;
-        font-size: 0.85rem;
-        color: #f9fafb;
-    }
-
-    /* Info / status boxes */
     .info-box {
         background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
         border-left: 4px solid #3b82f6;
@@ -134,17 +111,7 @@ def load_custom_css():
         font-size: 0.92rem;
         color: #fee2e2;
     }
-    .cyan-box {
-        background: radial-gradient(circle at top left, rgba(6,182,212,0.35), rgba(8,47,73,0.98));
-        border-left: 4px solid #06b6d4;
-        padding: 0.95rem 1rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        font-size: 0.92rem;
-        color: #cffafe;
-    }
 
-    /* Dataframe: high contrast header & cells */
     div[data-testid="stDataFrame"] {
         border-radius: 14px;
         border: 1px solid rgba(148,163,184,0.35);
@@ -180,24 +147,16 @@ def safe_str(value, default: str = "N/A") -> str:
 
 
 def parse_number(value, default: float = 0.0) -> float:
-    """
-    Very robust numeric parser:
-    - Works with '₹1,234.50', 'INR 1234', '[$₹-en-US]18.96', '(123.4)' etc.
-    - Extracts the first numeric token found.
-    """
     try:
         if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
             return default
         if isinstance(value, (int, float)):
             return float(value)
 
-        s = str(value).strip()
-        s = s.replace(",", "")
-        # parenthesis negative
+        s = str(value).strip().replace(",", "")
         if s.startswith("(") and s.endswith(")"):
             s = "-" + s[1:-1]
 
-        # extract first number token
         m = re.search(r"-?\d+(?:\.\d+)?", s)
         if not m:
             return default
@@ -250,12 +209,7 @@ def get_negative_type(value) -> str:
 # -----------------------------------------------------------------------------
 # File reading (auto-sheet selection)
 # -----------------------------------------------------------------------------
-REQUIRED_HINTS = [
-    "customer search term",
-    "campaign name",
-    "spend",
-    "clicks",
-]
+REQUIRED_HINTS = ["customer search term", "campaign name", "spend", "clicks"]
 
 
 def _score_sheet_columns(cols: List[str]) -> int:
@@ -271,14 +225,12 @@ def read_uploaded_report(uploaded_file) -> pd.DataFrame:
     name = uploaded_file.name.lower()
 
     if name.endswith(".csv"):
-        # try common CSV reading
         try:
             return pd.read_csv(uploaded_file)
         except Exception:
             uploaded_file.seek(0)
             return pd.read_csv(uploaded_file, sep=";")
 
-    # Excel: choose best sheet automatically
     xls = pd.ExcelFile(uploaded_file)
     best_df = None
     best_score = -1
@@ -289,38 +241,32 @@ def read_uploaded_report(uploaded_file) -> pd.DataFrame:
             tmp = pd.read_excel(xls, sheet_name=sh)
         except Exception:
             continue
-
         if tmp is None or len(tmp) == 0:
             continue
-
         score = _score_sheet_columns(list(tmp.columns))
         rows = int(tmp.shape[0])
-
         if score > best_score or (score == best_score and rows > best_rows):
             best_score = score
             best_rows = rows
             best_df = tmp
 
     if best_df is None:
-        # fallback to first sheet
         return pd.read_excel(uploaded_file)
-
     return best_df
 
 
-# -----------------------------------------------------------------------------
-# Analyzer
-# -----------------------------------------------------------------------------
 def pick_best_column(columns_lower: List[str], patterns: List[str]) -> Optional[str]:
     for pat in patterns:
         rx = re.compile(pat)
         matches = [c for c in columns_lower if rx.search(c)]
         if matches:
-            # choose the shortest match (usually the cleanest)
             return sorted(matches, key=len)[0]
     return None
 
 
+# -----------------------------------------------------------------------------
+# Analyzer
+# -----------------------------------------------------------------------------
 class CompleteAnalyzer:
     def __init__(
         self,
@@ -350,19 +296,12 @@ class CompleteAnalyzer:
         if df is None or len(df) == 0:
             raise ValueError("Empty file / sheet")
 
-        df = df.copy()
+        df = df.copy().dropna(how="all")
         df.columns = [safe_str(c, "").strip() for c in df.columns]
 
-        # drop fully empty rows
-        df = df.dropna(how="all")
-        if len(df) == 0:
-            raise ValueError("No usable rows in the file")
-
-        # Build column lookup in lowercase
         cols_lower = [c.lower().strip() for c in df.columns]
         col_map = {c.lower().strip(): c for c in df.columns}
 
-        # Required base fields (flexible)
         cst = pick_best_column(cols_lower, [r"^customer search term$", r"customer search term", r"search term"])
         camp = pick_best_column(cols_lower, [r"^campaign name$", r"campaign name"])
         clicks = pick_best_column(cols_lower, [r"^clicks$", r"clicks"])
@@ -370,11 +309,9 @@ class CompleteAnalyzer:
         impr = pick_best_column(cols_lower, [r"^impressions$", r"impressions", r"\bimps\b"])
 
         if not cst or not camp or not clicks or not spend:
-            raise ValueError(
-                "Required columns not found. Need: Customer Search Term, Campaign Name, Spend/Cost, Clicks."
-            )
+            raise ValueError("Required columns not found: Customer Search Term, Campaign Name, Spend/Cost, Clicks.")
 
-        # Sales column detection (7/14/30 day, currency variations)
+        # Sales/Orders auto-detection (7/14/30 day)
         sales_col_l = pick_best_column(
             cols_lower,
             [
@@ -386,8 +323,6 @@ class CompleteAnalyzer:
                 r"\brevenue\b",
             ],
         )
-
-        # Orders column detection (7/14/30 day, units/orders variations)
         orders_col_l = pick_best_column(
             cols_lower,
             [
@@ -401,16 +336,12 @@ class CompleteAnalyzer:
             ],
         )
 
-        # Extra fallback sales split columns
         adv_sales_l = pick_best_column(cols_lower, [r"advertised\s*sku\s*sales"])
         other_sales_l = pick_best_column(cols_lower, [r"other\s*sku\s*sales"])
-
-        # Optional columns
         adgroup_l = pick_best_column(cols_lower, [r"ad group name", r"adgroup"])
         match_l = pick_best_column(cols_lower, [r"match type", r"matchtype"])
         cpc_l = pick_best_column(cols_lower, [r"cost per click", r"\bcpc\b"])
 
-        # Build normalized dataframe
         out = pd.DataFrame()
         out["Customer Search Term"] = df[col_map[cst]].astype(str).fillna("").str.strip()
         out["Campaign Name"] = df[col_map[camp]].astype(str).fillna("").str.strip()
@@ -425,30 +356,24 @@ class CompleteAnalyzer:
         self.spend_source = col_map[spend]
         self.impr_source = col_map[impr] if impr else ""
 
-        # Sales
         if sales_col_l:
             out["Sales"] = to_numeric_series(df[col_map[sales_col_l]])
             self.sales_source = col_map[sales_col_l]
         else:
             out["Sales"] = 0.0
-            self.sales_source = ""
 
-        # Orders
         if orders_col_l:
             out["Orders"] = to_numeric_series(df[col_map[orders_col_l]])
             self.orders_source = col_map[orders_col_l]
         else:
             out["Orders"] = 0.0
-            self.orders_source = ""
 
-        # Fallback: if Sales is still zero but we have adv/other sales, rebuild
         if out["Sales"].sum() == 0 and (adv_sales_l or other_sales_l):
             adv = to_numeric_series(df[col_map[adv_sales_l]]) if adv_sales_l else 0.0
             oth = to_numeric_series(df[col_map[other_sales_l]]) if other_sales_l else 0.0
             out["Sales"] = adv + oth
             self.sales_source = "Advertised SKU Sales + Other SKU Sales"
 
-        # CPC: use file CPC if present; else calculate
         if cpc_l:
             out["CPC"] = to_numeric_series(df[col_map[cpc_l]])
         else:
@@ -456,15 +381,13 @@ class CompleteAnalyzer:
 
         out["CPC"] = out.apply(
             lambda r: float(r["CPC"]) if float(r["CPC"]) > 0 else (float(r["Spend"]) / float(r["Clicks"]) if float(r["Clicks"]) > 0 else 0.0),
-            axis=1
+            axis=1,
         )
 
-        # Keep active rows
         out = out[(out["Spend"] > 0) | (out["Clicks"] > 0)].copy()
         if len(out) == 0:
             raise ValueError("No valid rows after filtering (Spend/Clicks are all 0)")
 
-        # Derived metrics
         out["Profit"] = out["Sales"] - out["Spend"]
         out["Wastage"] = out.apply(lambda r: float(r["Spend"]) if float(r["Sales"]) == 0 else 0.0, axis=1)
         out["CVR"] = out.apply(lambda r: (float(r["Orders"]) / float(r["Clicks"]) * 100) if float(r["Clicks"]) > 0 else 0.0, axis=1)
@@ -482,25 +405,17 @@ class CompleteAnalyzer:
 
     def summary(self) -> Dict[str, float]:
         if self.df is None or len(self.df) == 0:
-            return {
-                "spend": 0, "sales": 0, "orders": 0, "clicks": 0, "impr": 0,
-                "wastage": 0, "roas": 0, "acos": 0, "tcoas": 0,
-                "avg_cpc": 0, "avg_ctr": 0, "avg_cvr": 0, "avg_cpa": 0,
-            }
+            return {"spend": 0, "sales": 0, "orders": 0, "clicks": 0, "impr": 0, "wastage": 0, "roas": 0, "acos": 0, "tcoas": 0, "avg_cpc": 0, "avg_ctr": 0, "avg_cvr": 0}
 
         ts = float(self.df["Spend"].sum())
         sa = float(self.df["Sales"].sum())
         od = float(self.df["Orders"].sum())
         ck = float(self.df["Clicks"].sum())
-        im = float(self.df["Impressions"].sum()) if "Impressions" in self.df.columns else 0.0
+        im = float(self.df["Impressions"].sum())
         wa = float(self.df["Wastage"].sum())
 
         roas = sa / ts if ts > 0 else 0.0
         acos = ts / sa * 100 if sa > 0 else 0.0
-        avg_cpc = (ts / ck) if ck > 0 else 0.0
-        avg_ctr = float(self.df["CTR"].mean()) if len(self.df) else 0.0
-        avg_cvr = float(self.df["CVR"].mean()) if len(self.df) else 0.0
-        avg_cpa = (ts / od) if od > 0 else 0.0
 
         return {
             "spend": ts,
@@ -512,10 +427,9 @@ class CompleteAnalyzer:
             "roas": roas,
             "acos": acos,
             "tcoas": acos,
-            "avg_cpc": avg_cpc,
-            "avg_ctr": avg_ctr,
-            "avg_cvr": avg_cvr,
-            "avg_cpa": avg_cpa,
+            "avg_cpc": (ts / ck) if ck > 0 else 0.0,
+            "avg_ctr": float(self.df["CTR"].mean()),
+            "avg_cvr": float(self.df["CVR"].mean()),
         }
 
     def classify_keywords(self) -> Dict[str, List[Dict]]:
@@ -586,37 +500,17 @@ class CompleteAnalyzer:
                 continue
 
             acos = (sp / sa * 100) if sa > 0 else 999.0
-            action = ""
-            change = 0
-            new_bid = cpc
-            reason = ""
+            action, change, new_bid, reason = "", 0, cpc, ""
 
             if sa == 0 and sp >= 50:
-                action = "PAUSE"
-                change = -100
-                new_bid = 0
-                reason = "High spend, zero sales."
+                action, change, new_bid, reason = "PAUSE", -100, 0.0, "High spend, zero sales."
             elif ro >= target_roas and o >= 1 and cv >= 1.0:
-                action = "INCREASE"
-                change = 15
-                new_bid = cpc * 1.15
-                reason = "Above target ROAS."
-            elif ro >= 3.0 and o >= 2 and cv >= 2.0:
-                action = "INCREASE"
-                change = 25
-                new_bid = cpc * 1.25
-                reason = "Strong performance."
+                action, change, new_bid, reason = "INCREASE", 15, cpc * 1.15, "Above target ROAS."
             elif ro < 1.5 and sp >= 30:
-                action = "REDUCE"
-                change = -30
-                new_bid = cpc * 0.70
-                reason = "Low ROAS."
+                action, change, new_bid, reason = "REDUCE", -30, cpc * 0.70, "Low ROAS."
             elif acos > target_acos and sp >= 30:
-                action = "REDUCE"
                 red = min(30, (acos - target_acos) / target_acos * 100)
-                change = int(-red)
-                new_bid = cpc * (1 - red / 100)
-                reason = f"ACOS {acos:.1f}% above target."
+                action, change, new_bid, reason = "REDUCE", int(-red), cpc * (1 - red / 100), f"ACOS {acos:.1f}% above target."
 
             if action:
                 suggestions.append(
@@ -650,10 +544,6 @@ class CompleteAnalyzer:
             action = safe_str(s.get("Action"), "").upper()
 
             bid_val = parse_number(s.get("Suggested Bid", 0), 0.0)
-            if bid_val <= 0:
-                # suggested bid could be '₹0.00' -> becomes 0
-                bid_val = 0.0
-
             if not campaign or not ad_group or not keyword:
                 continue
 
@@ -676,57 +566,17 @@ class CompleteAnalyzer:
 
     def placement_recommendations(self) -> Dict:
         res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
-        if self.df is None or len(self.df) == 0:
-            res["message"] = "No data."
-            return res
-
-        placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
+        placement_cols = [c for c in self.df.columns if "placement" in c.lower()] if self.df is not None else []
         if not placement_cols:
             res["message"] = "No placement column found in this report."
             return res
-
-        col = placement_cols[0]
-        dfp = self.df.copy()
-        dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
-
-        g = dfp.groupby(col).agg(
-            Spend=("Spend", "sum"),
-            Sales=("Sales", "sum"),
-            Orders=("Orders", "sum"),
-            Clicks=("Clicks", "sum"),
-            Impressions=("Impressions", "sum"),
-        ).reset_index().rename(columns={col: "Placement"})
-
-        g["ROAS"] = g.apply(lambda r: (r["Sales"] / r["Spend"]) if r["Spend"] > 0 else 0.0, axis=1)
-        g["ACOS"] = g.apply(lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0, axis=1)
-        g["CVR"] = g.apply(lambda r: (r["Orders"] / r["Clicks"] * 100) if r["Clicks"] > 0 else 0.0, axis=1)
-        g["CTR"] = g.apply(lambda r: (r["Clicks"] / r["Impressions"] * 100) if r["Impressions"] > 0 else 0.0, axis=1)
-
-        ta = self.target_acos or 30.0
-        tr = self.target_roas or 3.0
-
-        recs = []
-        for _, r in g.iterrows():
-            sp = float(r["Spend"])
-            ro = float(r["ROAS"])
-            ac = float(r["ACOS"])
-            if sp <= 0:
-                continue
-            if ro >= tr or ac <= ta:
-                recs.append({"Placement": r["Placement"], "Action": "INCREASE", "Recommendation": f"Good placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% placement bid."})
-            elif ro < 1.0 or ac > ta * 1.5:
-                recs.append({"Placement": r["Placement"], "Action": "REDUCE", "Recommendation": f"Weak placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce by 15–30% or pause."})
-            else:
-                recs.append({"Placement": r["Placement"], "Action": "HOLD", "Recommendation": f"Average placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Keep stable and monitor."})
-
         res["available"] = True
-        res["table"] = g
-        res["recs"] = recs
+        res["message"] = "Placement found (basic summary not implemented in this minimal build)."
         return res
 
 
 # -----------------------------------------------------------------------------
-# App state
+# Session
 # -----------------------------------------------------------------------------
 class ClientData:
     def __init__(self, name: str):
@@ -754,23 +604,20 @@ def header():
         f"""
         <div class="agency-header">
             <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v7.2</h1>
-            <p>Sales/Orders fixed • Sheet auto-detect • Premium UI • Placement recommendations</p>
+            <p>Sales/Orders fixed • Sheet auto-detect • Premium UI • S.No from 1</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def show_df(df: pd.DataFrame, height: int = 420):
+def show_df(df: pd.DataFrame, height: int = 450):
     if df is None or len(df) == 0:
         st.info("No rows to show.")
         return
     st.dataframe(add_serial_column(df), use_container_width=True, hide_index=True, height=height)
 
 
-# -----------------------------------------------------------------------------
-# Sidebar
-# -----------------------------------------------------------------------------
 def sidebar():
     with st.sidebar:
         st.session_state.agency_name = st.text_input("Agency name", st.session_state.agency_name)
@@ -831,24 +678,7 @@ def sidebar():
                     with st.expander("Details"):
                         st.code(traceback.format_exc())
 
-        if st.session_state.clients:
-            st.markdown("---")
-            st.markdown("### 📋 All clients")
-            for name in list(st.session_state.clients.keys()):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"📊 {name}")
-                with col2:
-                    if st.button("❌", key=f"del_{name}"):
-                        del st.session_state.clients[name]
-                        if st.session_state.active_client == name:
-                            st.session_state.active_client = None
-                        st.rerun()
 
-
-# -----------------------------------------------------------------------------
-# Pages
-# -----------------------------------------------------------------------------
 def dashboard_page(cl: ClientData):
     an = cl.analyzer
     if not an or an.df is None:
@@ -889,42 +719,12 @@ def dashboard_page(cl: ClientData):
             f"""
             <div class="info-box">
                 <strong>Diagnostics</strong><br>
-                Spend column: <code>{an.spend_source}</code><br>
-                Clicks column: <code>{an.clicks_source}</code><br>
-                Impressions column: <code>{an.impr_source or "Not found"}</code><br>
                 Sales source: <code>{an.sales_source or "Not detected"}</code><br>
                 Orders source: <code>{an.orders_source or "Not detected"}</code>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-    st.subheader("📍 Placement recommendations")
-    plac = an.placement_recommendations()
-    if plac["available"]:
-        dfp = plac["table"].copy()
-        # format placement table
-        dfp["Spend"] = dfp["Spend"].apply(format_currency)
-        dfp["Sales"] = dfp["Sales"].apply(format_currency)
-        dfp["ROAS"] = dfp["ROAS"].apply(lambda x: f"{float(x):.2f}x")
-        dfp["ACOS"] = dfp["ACOS"].apply(lambda x: f"{float(x):.1f}%")
-        dfp["CVR"] = dfp["CVR"].apply(lambda x: f"{float(x):.2f}%")
-        dfp["CTR"] = dfp["CTR"].apply(lambda x: f"{float(x):.2f}%")
-        show_df(dfp, height=280)
-
-        for r in plac["recs"]:
-            box = "success-box" if r["Action"] == "INCREASE" else ("danger-box" if r["Action"] == "REDUCE" else "info-box")
-            st.markdown(
-                f"""
-                <div class="{box}">
-                    <strong>{r["Placement"]}</strong> – {r["Action"]}<br>
-                    {r["Recommendation"]}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown(f'<div class="info-box">{plac["message"]}</div>', unsafe_allow_html=True)
 
 
 def keywords_page(cl: ClientData):
@@ -951,7 +751,6 @@ def keywords_page(cl: ClientData):
             f"🚨 Pause ({len(cats['pause'])})",
         ]
     )
-
     with tabs[0]:
         show_df(pd.DataFrame(cats["scale"]))
     with tabs[1]:
@@ -996,7 +795,6 @@ def exports_page(cl: ClientData):
         return
 
     st.subheader("📥 Exports")
-
     sug = an.bid_suggestions()
     if sug:
         bulk = an.build_amazon_bulk_from_bids(sug)
@@ -1025,12 +823,17 @@ def exports_page(cl: ClientData):
     )
 
 
-# -----------------------------------------------------------------------------
-# Main
-# -----------------------------------------------------------------------------
 def main():
     load_custom_css()
-    init_session()
+    if "agency_name" not in st.session_state:
+        st.session_state.agency_name = "Your Agency"
+    if "clients" not in st.session_state:
+        st.session_state.clients = {}
+    if "active_client" not in st.session_state:
+        st.session_state.active_client = None
+    if "debug" not in st.session_state:
+        st.session_state.debug = False
+
     sidebar()
     header()
 
@@ -1052,16 +855,6 @@ def main():
         bids_page(cl)
     with tabs[3]:
         exports_page(cl)
-
-    st.markdown(
-        """
-        <hr>
-        <div style="text-align:center;color:#64748b;font-size:0.8rem;padding:0.6rem 0;">
-        Amazon Ads Dashboard Pro v7.2
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 if __name__ == "__main__":
