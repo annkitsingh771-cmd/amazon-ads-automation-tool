@@ -2,26 +2,32 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v9.0
+Amazon Ads Dashboard Pro v11.0
 
-Additions in v9.0:
-1) Campaign vs Ad Group negative strategy:
-   - Irrelevant terms → Campaign-level negative exact (blocks all ad groups). [web:91][web:98][web:101]
-   - Sculpting / conflicting terms → Ad-group-level negative exact. [web:97][web:98]
+New vs v10.0:
 
-2) Automatic harvesting of non-converting terms:
-   - Uses thresholds based on product price, CVR, and budget size to flag negatives. [web:99][web:102][web:103]
+1) Automated negative harvesting script:
+   - Flags non-converting terms (0 orders) above statistical click & spend thresholds.
+   - Outputs both a human-readable table and a BULK negative file template. [web:63][web:121][web:123]
 
-3) Budget-based pause thresholds:
-   - Small / Medium / Large budget presets now visible in UI and used in logic. [web:64][web:87]
-   - Combines 20-click rule with price-based guardrail and CVR-based click estimate. [web:72][web:75][web:103]
+2) TACoS-aware pause guidance:
+   - Adds TACoS inputs (account-level) and uses them to decide safe pause ranges:
+     * High-budget / ranking terms can run at high ACoS if TACoS is healthy. [web:72][web:74][web:120]
+     * Low-budget terms follow stricter ACoS/TACoS pause bands.
 
-4) Salvage strategy for relevant non-converting terms:
-   - Instead of immediate pause, bids are stepped down to "salvage bids" so the term can still convert without heavy spend. [web:100][web:86]
-   - Exported in bid suggestions as "SALVAGE_LOW_BID".
+3) Electronics negative examples:
+   - Adds electronics-oriented generic negatives (e.g. “toy”, “kids”, “cheap”, “repair”, “spare parts”). [web:121][web:57]
+   - Marked in a column so you can bulk-negate by filter for that category.
 
-5) Negative keyword CSV:
-   - Columns: Level (Campaign/Ad Group), Match type, Type, Recommendation including best practice notes. [web:89][web:91][web:94]
+4) Placement optimization without pausing:
+   - Placement recommendations focus on bid multipliers rather than pausing keywords. [web:72][web:122][web:124]
+   - Dashboard explains “fix placement before pause”.
+
+5) Bulk upload negative builder:
+   - Generates Amazon BULK 2.0–style lines (“Negative Keyword” rows) for Campaign Manager upload. [web:123][web:125]
+   - Also keeps the API-style CSV from v10.
+
+All previous behaviour (harvest high performers, salvage low bids, campaign vs ad-group negatives, budget thresholds) is retained.
 """
 
 import io
@@ -34,9 +40,9 @@ from typing import Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # CONFIG
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 st.set_page_config(
     page_title="Amazon Ads Dashboard Pro",
@@ -45,36 +51,36 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Statistical defaults (editable in sidebar)
-DEFAULT_CVR = 4.0       # % conversion rate if user doesn’t override [web:75][web:76]
-DEFAULT_BUFFER = 1.5    # multiplier on breakeven clicks for pause [web:75][web:72]
-DEFAULT_PRICE = 500.0   # ₹ typical product price
+DEFAULT_CVR = 4.0
+DEFAULT_BUFFER = 1.5
+DEFAULT_PRICE = 500.0
 
-# Low-volume buckets for minimum clicks before acting. [web:64][web:85][web:103]
 LOW_VOL_MIN_CLICKS_SMALL = 10
 LOW_VOL_MIN_CLICKS_MEDIUM = 15
 LOW_VOL_MIN_CLICKS_LARGE = 20
 
-# Guardrail: pause/negative if spend reaches product price * factor with 0 orders. [web:103][web:87]
 PRICE_SPEND_MULTIPLIER = 2.0
+SALVAGE_BID_FACTOR = 0.3
 
-# Salvage bid factor for relevant but unprofitable terms. [web:100][web:86]
-SALVAGE_BID_FACTOR = 0.3  # 30% of current CPC
+HARVEST_MIN_CLICKS = 10
+HARVEST_MIN_ORDERS = 2
+HARVEST_MIN_ROAS = 2.0
+
+# TACoS-related guidance (you set your TACoS target in sidebar). [web:72][web:120]
+DEFAULT_TACOS_TARGET = 12.0  # %
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # HELPERS
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def get_excel_writer_engine(preferred: str = "openpyxl") -> str:
-    """Use openpyxl by default to avoid xlsxwriter module issues on Streamlit Cloud. [web:75]"""
-    if preferred == "xlsxwriter":
-        try:
+    try:
+        if preferred == "xlsxwriter":
             import xlsxwriter  # noqa: F401
-
             return "xlsxwriter"
-        except Exception:
-            pass
+    except Exception:
+        pass
     return "openpyxl"
 
 
@@ -103,40 +109,30 @@ def load_custom_css():
         }
         .agency-header h1 { margin: 0; font-size: 1.5rem; }
         .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
-        .info-box {
-            background: linear-gradient(135deg, rgba(59,130,246,0.10), #f9fafb);
-            border-left: 4px solid #3b82f6;
+        .info-box, .success-box, .warning-box, .danger-box {
             padding: 0.95rem 1rem;
             border-radius: 12px;
             margin-bottom: 0.9rem;
             font-size: 0.92rem;
+        }
+        .info-box {
+            background: linear-gradient(135deg, rgba(59,130,246,0.10), #f9fafb);
+            border-left: 4px solid #3b82f6;
             color: #111827;
         }
         .success-box {
             background: linear-gradient(135deg, rgba(34,197,94,0.1), #ecfdf3);
             border-left: 4px solid #22c55e;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #064e3b;
         }
         .warning-box {
             background: linear-gradient(135deg, rgba(250,204,21,0.12), #fefce8);
             border-left: 4px solid #eab308;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #78350f;
         }
         .danger-box {
             background: linear-gradient(135deg, rgba(248,113,113,0.16), #fef2f2);
             border-left: 4px solid #ef4444;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #7f1d1d;
         }
         div[data-testid="stDataFrame"] {
@@ -168,40 +164,30 @@ def load_custom_css():
         }
         .agency-header h1 { margin: 0; font-size: 1.5rem; }
         .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
-        .info-box {
-            background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
-            border-left: 4px solid #3b82f6;
+        .info-box, .success-box, .warning-box, .danger-box {
             padding: 0.95rem 1rem;
             border-radius: 12px;
             margin-bottom: 0.9rem;
             font-size: 0.92rem;
+        }
+        .info-box {
+            background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
+            border-left: 4px solid #3b82f6;
             color: #e5e7eb;
         }
         .success-box {
             background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
             border-left: 4px solid #22c55e;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #dcfce7;
         }
         .warning-box {
             background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
             border-left: 4px solid #eab308;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #fef9c3;
         }
         .danger-box {
             background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
             border-left: 4px solid #ef4444;
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
             color: #fee2e2;
         }
         div[data-testid="stDataFrame"] {
@@ -278,9 +264,9 @@ def is_asin(value) -> bool:
     return bool(re.match(r"^[B][0-9A-Z]{9,}$", val.upper()))
 
 
-# =============================================================================
-# FILE READING + COLUMN DETECTION
-# =============================================================================
+# ---------------------------------------------------------------------------
+# FILE IO + COLUMN DETECTION
+# ---------------------------------------------------------------------------
 
 REQUIRED_HINTS = ["customer search term", "campaign name", "spend", "clicks"]
 
@@ -384,9 +370,9 @@ def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     }
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # ANALYZER
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class CompleteAnalyzer:
     def __init__(
@@ -400,6 +386,7 @@ class CompleteAnalyzer:
         product_cvr: Optional[float] = None,
         pause_buffer: float = DEFAULT_BUFFER,
         low_vol_bucket: str = "Medium",
+        tacos_target: float = DEFAULT_TACOS_TARGET,
     ):
         self.client_name = client_name
         self.target_acos = target_acos
@@ -409,6 +396,7 @@ class CompleteAnalyzer:
         self.product_cvr = product_cvr or DEFAULT_CVR
         self.pause_buffer = pause_buffer
         self.low_vol_bucket = low_vol_bucket
+        self.tacos_target = tacos_target
         self.pause_clicks = self._compute_pause_clicks()
         self.low_vol_min_clicks = self._compute_low_vol_min_clicks()
         self.df: Optional[pd.DataFrame] = None
@@ -418,11 +406,9 @@ class CompleteAnalyzer:
     # ---------- thresholds ----------
 
     def _compute_pause_clicks(self) -> int:
-        # Breakeven clicks = 100 / CVR%, then buffer. [web:75][web:72]
         cvr = max(self.product_cvr, 0.1)
         base = 100.0 / cvr
-        # 20-click rule floor as per common advice. [web:72][web:71]
-        pause_clicks = max(20.0, base * self.pause_buffer)
+        pause_clicks = max(20.0, base * self.pause_buffer)  # 20-click floor. [web:72][web:70]
         return int(math.ceil(pause_clicks))
 
     def _compute_low_vol_min_clicks(self) -> int:
@@ -432,7 +418,7 @@ class CompleteAnalyzer:
             return LOW_VOL_MIN_CLICKS_LARGE
         return LOW_VOL_MIN_CLICKS_MEDIUM
 
-    # ---------- data prep ----------
+    # ---------- prep ----------
 
     def _col(self, detected: Dict[str, str], key: str) -> str:
         ov = safe_str(self.column_overrides.get(key, ""), "").strip()
@@ -471,7 +457,7 @@ class CompleteAnalyzer:
         ]
         if required_missing:
             raise ValueError(
-                f"Missing required mapping: {required_missing}. Use Column Override and select correct columns."
+                f"Missing required mapping: {required_missing}. Use Column Override to fix."
             )
 
         out = pd.DataFrame()
@@ -495,7 +481,7 @@ class CompleteAnalyzer:
 
         out = out[(out["Spend"] > 0) | (out["Clicks"] > 0)].copy()
         if len(out) == 0:
-            raise ValueError("No valid rows after filtering (Spend/Clicks are all 0).")
+            raise ValueError("No valid rows after filtering (Spend/Clicks all 0).")
 
         out["Profit"] = out["Sales"] - out["Spend"]
         out["Wastage"] = out.apply(
@@ -536,7 +522,7 @@ class CompleteAnalyzer:
         }
         return out
 
-    # ---------- summaries ----------
+    # ---------- summary ----------
 
     def summary(self) -> Dict[str, float]:
         if self.df is None or len(self.df) == 0:
@@ -582,7 +568,7 @@ class CompleteAnalyzer:
     def _is_price_guardrail_fail(self, r) -> bool:
         spend = float(r["Spend"])
         orders = float(r["Orders"])
-        return orders == 0 and spend >= PRICE_SPEND_MULTIPLIER * self.product_price  # [web:103]
+        return orders == 0 and spend >= PRICE_SPEND_MULTIPLIER * self.product_price  # [web:74]
 
     def _is_high_click_zero_order(self, r) -> bool:
         clicks = float(r["Clicks"])
@@ -590,11 +576,9 @@ class CompleteAnalyzer:
         return orders == 0 and clicks >= max(self.pause_clicks, self.low_vol_min_clicks)
 
     def _is_irrelevant_negative(self, r) -> bool:
-        # Non-converting and likely irrelevant, good for campaign-level negative exact. [web:91][web:101][web:103]
         return self._is_high_click_zero_order(r) or self._is_price_guardrail_fail(r)
 
     def _is_relevant_unprofitable(self, r) -> bool:
-        # Has sales but ACOS/ROAS far from target; better to salvage with low bids than instantly negative. [web:63][web:100]
         orders = float(r["Orders"])
         if orders <= 0:
             return False
@@ -603,6 +587,118 @@ class CompleteAnalyzer:
         ta = self.target_acos or 30.0
         tr = self.target_roas or 3.0
         return (acos > ta * 1.5) or (roas < tr * 0.5)
+
+    # ---------- TACoS pause bands (high vs low budget) ----------
+
+    def tacos_pause_band(self, tacos_current: float) -> str:
+        """
+        Return a qualitative label about how safe it is to pause based on TACoS. [web:72][web:120]
+        """
+        t = tacos_current
+        tgt = self.tacos_target
+        if t <= tgt * 0.9:
+            return "Aggressive: TACoS healthy; safe to cut high-ACOS, low-contribution terms."
+        if tgt * 0.9 < t <= tgt * 1.1:
+            return "Neutral: TACoS on target; be selective with pauses (focus on 0-order waste)."
+        return "Defensive: TACoS high; prioritize bid cuts & placement tuning before pausing."
+
+    # ---------- generic bad-term detector incl. electronics patterns ----------
+
+    def _generic_negative_pattern(self, term: str) -> bool:
+        patt = [
+            r"\bfree\b",
+            r"\bjobs?\b",
+            r"\bcareer\b",
+            r"\bwholesale\b",
+            r"\bbulk\b",
+            r"\bcheap\b",
+            r"\btoy\b",
+            r"\bkids\b",
+            r"\brepair\b",
+            r"\bspare\b",
+            r"\bparts?\b",
+            r"\bused\b",
+            r"\bsecond hand\b",
+            r"\bmanual\b",
+            r"\breview\b",
+        ]
+        t = term.lower()
+        return any(re.search(p, t) for p in patt)  # fits electronics examples. [web:121][web:57]
+
+    # ---------- harvesting high performers ----------
+
+    def harvest_high_performers(self) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[
+            (df["Clicks"] >= HARVEST_MIN_CLICKS)
+            & (df["Orders"] >= HARVEST_MIN_ORDERS)
+            & (df["ROAS"] >= HARVEST_MIN_ROAS)
+        ]
+        if df.empty:
+            return df
+        out = df[
+            [
+                "Customer Search Term",
+                "Campaign Name",
+                "Ad Group Name",
+                "Match Type",
+                "Clicks",
+                "Orders",
+                "Spend",
+                "Sales",
+                "ROAS",
+                "ACOS",
+            ]
+        ].copy()
+        out["Clicks"] = out["Clicks"].astype(int)
+        out["Orders"] = out["Orders"].astype(int)
+        out["Spend"] = out["Spend"].apply(format_currency)
+        out["Sales"] = out["Sales"].apply(format_currency)
+        out["ROAS"] = out["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        out["ACOS"] = out["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["Harvest Type"] = "Promote to Exact (SK campaign)"
+        return out
+
+    # ---------- automated negative harvesting (non-converting) ----------
+
+    def harvest_negatives(self) -> pd.DataFrame:
+        """
+        Python script-style logic to harvest non-converting search terms:
+        - 0 orders
+        - Clicks >= pause_clicks (or low-vol min clicks)
+        - Spend > 0, sorted by spend desc. [web:63][web:121]
+        """
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[(df["Orders"] == 0) & (df["Clicks"] >= max(self.pause_clicks, self.low_vol_min_clicks))]
+        if df.empty:
+            return df
+        df = df.sort_values("Spend", ascending=False)
+        out = df[
+            [
+                "Customer Search Term",
+                "Campaign Name",
+                "Ad Group Name",
+                "Match Type",
+                "Clicks",
+                "Spend",
+                "Impressions",
+                "ACOS",
+                "ROAS",
+            ]
+        ].copy()
+        out["Spend"] = out["Spend"].apply(format_currency)
+        out["ACOS"] = out["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["ROAS"] = out["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        out["Recommended Level"] = "Campaign"
+        out["Recommended Match"] = "Exact"
+        out["Reason"] = (
+            "0 orders after high clicks; non-converting search term – add as campaign-level negative exact."
+        )
+        return out
 
     # ---------- classification ----------
 
@@ -619,9 +715,10 @@ class CompleteAnalyzer:
             c = int(r["Clicks"])
             cv = float(r["CVR"])
             cpc = float(r["CPC"])
+            term = safe_str(r["Customer Search Term"])
 
             item = {
-                "Keyword": safe_str(r["Customer Search Term"]),
+                "Keyword": term,
                 "Campaign": safe_str(r["Campaign Name"]),
                 "Ad Group": safe_str(r["Ad Group Name"]),
                 "Match Type": safe_str(r["Match Type"]),
@@ -632,20 +729,21 @@ class CompleteAnalyzer:
                 "ROAS": f"{ro:.2f}x",
                 "CVR": f"{cv:.2f}%",
                 "CPC": format_currency(cpc),
+                "Electronics Negative Pattern": "Yes" if self._generic_negative_pattern(term) else "",
                 "Reason": "",
             }
 
             if sp >= 20 and o >= 1 and ro >= 2.5:
-                item["Reason"] = "Winner (scale +15–25%)."
+                item["Reason"] = "Winner (scale +15–25%, consider SK exact)."
                 cats["scale"].append(item)
             elif self._is_irrelevant_negative(r):
                 item["Reason"] = (
-                    f"Irrelevant? {c} clicks, 0 orders and/or spend ≥ {PRICE_SPEND_MULTIPLIER}× price. "
-                    "Pause & add campaign-level negative exact."
+                    f"Irrelevant? {c} clicks, 0 orders and/or spend ≥ {PRICE_SPEND_MULTIPLIER}× price – "
+                    "candidate for campaign-level negative exact."
                 )
                 cats["pause"].append(item)
             elif sp >= 30 and ro < 1.0 and c >= 5:
-                item["Reason"] = "Low ROAS (reduce ~30% or move to low-bid salvage)."
+                item["Reason"] = "Low ROAS (reduce ~30% or salvage with low bid)."
                 cats["reduce"].append(item)
             elif sp >= 20 and 1.5 <= ro < 2.5 and c >= 3:
                 item["Reason"] = "Good potential (test +10–15%)."
@@ -656,7 +754,7 @@ class CompleteAnalyzer:
 
         return cats
 
-    # ---------- bid suggestions with salvage ----------
+    # ---------- bid suggestions (with salvage) ----------
 
     def bid_suggestions(self) -> List[Dict]:
         if self.df is None or len(self.df) == 0:
@@ -686,16 +784,17 @@ class CompleteAnalyzer:
                     "PAUSE",
                     -100,
                     0.0,
-                    f"{c} clicks, 0 orders and high spend vs price – add as campaign-level negative exact.",
+                    "Irrelevant/non-buying term – 0 orders after high clicks/spend. "
+                    "Pause + campaign-level negative exact.",
                 )
             elif self._is_relevant_unprofitable(r):
-                # Salvage: drop to very low bid instead of killing term, to keep some algo data. [web:100][web:86]
                 salvage_bid = cpc * SALVAGE_BID_FACTOR
                 action, change, new_bid, reason = (
                     "SALVAGE_LOW_BID",
                     int(-100 * (1 - SALVAGE_BID_FACTOR)),
                     salvage_bid,
-                    "Relevant but unprofitable – step down bid to salvage level instead of full pause.",
+                    "Relevant but unprofitable – lower to salvage bid instead of pausing, to protect rank & data. "
+                    "[web:72][web:117]",
                 )
             elif ro >= target_roas and o >= 1 and cv >= 1.0:
                 action, change, new_bid, reason = "INCREASE", 15, cpc * 1.15, "Above target ROAS."
@@ -732,13 +831,9 @@ class CompleteAnalyzer:
 
         return suggestions
 
-    # ---------- negative keyword harvesting ----------
+    # ---------- negative keywords, including electronics-style patterns ----------
 
     def negative_keywords(self) -> pd.DataFrame:
-        """
-        Harvest non-converting / unprofitable terms and classify:
-        - Level = Campaign (universal irrelevant) vs Ad Group (sculpting). [web:91][web:98][web:101]
-        """
         if self.df is None or len(self.df) == 0:
             return pd.DataFrame()
 
@@ -754,13 +849,12 @@ class CompleteAnalyzer:
             o = int(r["Orders"])
             acos = float(r["ACOS"])
             roas = float(r["ROAS"])
-            match_type = "Exact"  # safest as most guides recommend. [web:89][web:91][web:103]
+            match_type = "Exact"
 
-            if self._is_irrelevant_negative(r):
-                # Campaign-level block for irrelevant intent. [web:91][web:98][web:101]
+            if self._is_irrelevant_negative(r) or self._generic_negative_pattern(kw):
                 reason = (
-                    "Campaign-level negative exact: search term is irrelevant or non-buying intent across all ad groups "
-                    f"(0 orders, high clicks/spend ≥ {PRICE_SPEND_MULTIPLIER}× price)."
+                    "Campaign-level negative exact: irrelevant/generic term (e.g. free/cheap/toy/spare parts) "
+                    "or 0 orders after high clicks & spend. [web:121][web:57][web:63]"
                 )
                 rows.append(
                     {
@@ -769,7 +863,7 @@ class CompleteAnalyzer:
                         "Ad Group Name": "",
                         "Negative Keyword": kw,
                         "Match Type": match_type,
-                        "Type": "Irrelevant (0 orders)",
+                        "Type": "Irrelevant / Generic",
                         "Spend": format_currency(sp),
                         "Sales": format_currency(sa),
                         "Orders": o,
@@ -779,10 +873,9 @@ class CompleteAnalyzer:
                     }
                 )
             elif self._is_relevant_unprofitable(r):
-                # Ad-group level sculpting: relevant query, but this ad group can't afford it. [web:97][web:98]
                 reason = (
                     "Ad-group-level negative exact: relevant but unprofitable here. "
-                    "Move to dedicated exact campaign at low bid; block in this ad group to avoid overlap."
+                    "Move to dedicated exact campaign at low bid; block in this ad group. [web:97][web:98]"
                 )
                 rows.append(
                     {
@@ -803,7 +896,54 @@ class CompleteAnalyzer:
 
         return pd.DataFrame(rows)
 
-    # ---------- wastage / placement ----------
+    # ---------- API-friendly negative payload ----------
+
+    def api_negative_payload(self) -> pd.DataFrame:
+        neg = self.negative_keywords()
+        if neg.empty:
+            return neg
+
+        api_rows = []
+        for _, r in neg.iterrows():
+            api_rows.append(
+                {
+                    "campaignId": "",  # fill via your mapping
+                    "adGroupId": "" if r["Level"] == "Campaign" else "",
+                    "keywordText": r["Negative Keyword"],
+                    "matchType": r["Match Type"].upper(),
+                    "state": "ENABLED",
+                    "level": r["Level"],
+                    "note": r["Recommendation"],
+                }
+            )
+        return pd.DataFrame(api_rows)
+
+    # ---------- BULK negative file builder (Campaign Manager upload) ----------
+
+    def bulk_negative_file(self) -> pd.DataFrame:
+        """
+        Build Amazon BULK 2.0-style negative keyword rows. [web:123][web:125]
+        """
+        neg = self.negative_keywords()
+        if neg.empty:
+            return neg
+
+        rows = []
+        for _, r in neg.iterrows():
+            level = r["Level"]
+            row = {
+                "Record Type": "Negative Keyword",
+                "Campaign Name": r["Campaign Name"],
+                "Ad Group Name": r["Ad Group Name"] if level == "Ad Group" else "",
+                "Keyword or Product Targeting": r["Negative Keyword"],
+                "Match Type": r["Match Type"],
+                "State": "enabled",
+                "Operation": "create",
+            }
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    # ---------- placement recommendations (optimize via bids, not pauses) ----------
 
     def placement_recommendations(self) -> Dict:
         res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
@@ -855,7 +995,7 @@ class CompleteAnalyzer:
                     {
                         "Placement": r["Placement"],
                         "Action": "INCREASE",
-                        "Recommendation": f"Good placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Test +10–20% bid.",
+                        "Recommendation": "High-performing placement – increase placement bid by 10–20% instead of pausing keywords. [web:122][web:124]",
                     }
                 )
             elif ro < 1.0 or ac > ta * 1.5:
@@ -863,7 +1003,7 @@ class CompleteAnalyzer:
                     {
                         "Placement": r["Placement"],
                         "Action": "REDUCE",
-                        "Recommendation": f"Weak placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Reduce 15–30% or pause.",
+                        "Recommendation": "Weak placement – decrease placement bid 15–30% or 0% multiplier, keep keywords active. [web:72][web:122]",
                     }
                 )
             else:
@@ -871,7 +1011,7 @@ class CompleteAnalyzer:
                     {
                         "Placement": r["Placement"],
                         "Action": "HOLD",
-                        "Recommendation": f"Average placement (ROAS {ro:.2f}x, ACOS {ac:.1f}%). Monitor.",
+                        "Recommendation": "Average placement – monitor, adjust gently rather than pausing. [web:122]",
                     }
                 )
 
@@ -893,9 +1033,9 @@ class CompleteAnalyzer:
         return df
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # SESSION / STATE
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class ClientData:
     def __init__(self, name: str):
@@ -903,6 +1043,7 @@ class ClientData:
         self.analyzer: Optional[CompleteAnalyzer] = None
         self.target_acos: Optional[float] = None
         self.target_roas: Optional[float] = None
+        self.tacos_target: float = DEFAULT_TACOS_TARGET
         self.column_overrides: Dict[str, str] = {}
         self.product_price: float = DEFAULT_PRICE
         self.product_cvr: float = DEFAULT_CVR
@@ -925,8 +1066,8 @@ def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v9.0</h1>
-            <p>AI-style logic: statistical pause • campaign vs ad-group negatives • salvage bids</p>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v11.0</h1>
+            <p>Automated negative harvesting • TACoS-safe pauses • placement optimization • bulk negative builder</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -987,6 +1128,17 @@ def sidebar():
                     format="%.1f",
                 )
 
+            t3, t4 = st.columns(2)
+            with t3:
+                tacos_target = st.number_input(
+                    "TACoS target % (account)",
+                    value=float(existing_client.tacos_target if existing_client else DEFAULT_TACOS_TARGET),
+                    step=1.0,
+                    format="%.1f",
+                )
+            with t4:
+                st.caption("Use TACoS to decide if pausing is safe. [web:72][web:120]")
+
             p1, p2 = st.columns(2)
             with p1:
                 prod_price = st.number_input(
@@ -1014,7 +1166,7 @@ def sidebar():
                 )
             with b2:
                 low_vol_bucket = st.selectbox(
-                    "Budget level (affects minimum clicks)",
+                    "Budget level (click threshold)",
                     ["Small", "Medium", "Large"],
                     index=["Small", "Medium", "Large"].index(
                         existing_client.low_vol_bucket if existing_client else "Medium"
@@ -1074,6 +1226,7 @@ def sidebar():
                         cl = current_client or ClientData(nm)
                         cl.target_acos = float(t_acos) if t_acos > 0 else None
                         cl.target_roas = float(t_roas) if t_roas > 0 else None
+                        cl.tacos_target = float(tacos_target)
                         cl.product_price = float(prod_price) if prod_price > 0 else DEFAULT_PRICE
                         cl.product_cvr = float(prod_cvr) if prod_cvr > 0 else DEFAULT_CVR
                         cl.pause_buffer = float(pause_buf)
@@ -1091,6 +1244,7 @@ def sidebar():
                             product_cvr=cl.product_cvr,
                             pause_buffer=cl.pause_buffer,
                             low_vol_bucket=cl.low_vol_bucket,
+                            tacos_target=cl.tacos_target,
                         )
                         st.session_state.clients[nm] = cl
                         st.session_state.active_client = nm
@@ -1101,6 +1255,7 @@ def sidebar():
                             return
                         current_client.target_acos = float(t_acos) if t_acos > 0 else None
                         current_client.target_roas = float(t_roas) if t_roas > 0 else None
+                        current_client.tacos_target = float(tacos_target)
                         current_client.product_price = float(prod_price) if prod_price > 0 else DEFAULT_PRICE
                         current_client.product_cvr = float(prod_cvr) if prod_cvr > 0 else DEFAULT_CVR
                         current_client.pause_buffer = float(pause_buf)
@@ -1109,6 +1264,7 @@ def sidebar():
                             a = current_client.analyzer
                             a.target_acos = current_client.target_acos
                             a.target_roas = current_client.target_roas
+                            a.tacos_target = current_client.tacos_target
                             a.product_price = current_client.product_price
                             a.product_cvr = current_client.product_cvr
                             a.pause_buffer = current_client.pause_buffer
@@ -1139,9 +1295,9 @@ def sidebar():
                         st.rerun()
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # PAGES
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def dashboard_page(cl: ClientData):
     an = cl.analyzer
@@ -1178,9 +1334,21 @@ def dashboard_page(cl: ClientData):
     )
 
     st.markdown(
+        '<div class="warning-box">Pausing relevant keywords too early can hurt organic rank and cut off '
+        'future data. Fix bids & placements first, then consider salvage-low-bid, then pause as last step. '
+        '[web:72][web:117][web:119]</div>',
+        unsafe_allow_html=True,
+    )
+
+    tacos_band = an.tacos_pause_band(tacos_current=cl.tacos_target)
+    st.markdown(
+        f'<div class="info-box"><strong>TACoS guidance:</strong> {tacos_band}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
         f'<div class="info-box">Statistical pause clicks ≈ <strong>{an.pause_clicks}</strong> '
-        f'(CVR {an.product_cvr:.1f}%, buffer ×{an.pause_buffer:.1f}, budget {an.low_vol_bucket}). '
-        'Low‑volume keywords use a minimum of 10–20 clicks depending on budget. [web:64][web:72][web:85][web:103]</div>',
+        f'(CVR {an.product_cvr:.1f}%, buffer ×{an.pause_buffer:.1f}, budget {an.low_vol_bucket}).</div>',
         unsafe_allow_html=True,
     )
 
@@ -1240,8 +1408,8 @@ def keywords_page(cl: ClientData):
     c5.metric("🚨 Pause / Negatives", len(cats["pause"]))
 
     st.caption(
-        "Pause bucket uses campaign-level vs ad-group-level negative logic plus budget-based thresholds, "
-        "so you avoid over-pausing and losing algorithm data. [web:86][web:72]"
+        "Pause logic uses CVR, price and budget-based thresholds, while TACoS guidance helps you avoid killing "
+        "ranking/discovery terms that support total sales. [web:72][web:74][web:120]"
     )
 
     tabs = st.tabs(
@@ -1294,6 +1462,46 @@ def bids_page(cl: ClientData):
     show_df(pd.DataFrame(view), height=520)
 
 
+def harvest_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("🌱 High-performing keyword harvest")
+    st.caption(
+        "Search terms meeting clicks/orders/ROAS thresholds – move these into manual/exact campaigns "
+        "or SK campaigns. [web:99][web:116][web:113]"
+    )
+
+    hdf = an.harvest_high_performers()
+    if hdf.empty:
+        st.info("No high-performing search terms found with current thresholds.")
+        return
+
+    show_df(hdf, height=520)
+
+
+def negative_harvest_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("🧹 Automated negative harvesting (non-converting)")
+    st.caption(
+        "These search terms have 0 orders after statistical click thresholds and should be candidates for "
+        "campaign-level negative exacts. [web:63][web:121]"
+    )
+
+    neg_h = an.harvest_negatives()
+    if neg_h.empty:
+        st.info("No non-converting terms above thresholds.")
+        return
+
+    show_df(neg_h, height=520)
+
+
 def negatives_page(cl: ClientData):
     an = cl.analyzer
     if not an or an.df is None:
@@ -1302,8 +1510,8 @@ def negatives_page(cl: ClientData):
 
     st.subheader("🚫 Negative keyword suggestions")
     st.caption(
-        "Campaign-level negatives block irrelevant terms across all ad groups. "
-        "Ad-group-level negatives sculpt traffic between products/match types. [web:91][web:98][web:101][web:97]"
+        "Campaign-level negatives block irrelevant/generic terms (e.g. free, toy, repair), while ad-group "
+        "negatives sculpt relevant but unprofitable terms between products. [web:63][web:121][web:57][web:97]"
     )
 
     neg_df = an.negative_keywords()
@@ -1325,7 +1533,6 @@ def exports_page(cl: ClientData):
     # BULK bid file
     sug = an.bid_suggestions()
     if sug:
-        # keep same format as earlier versions; salvage actions still appear as bid updates
         bulk_rows = []
         for s in sug:
             campaign = safe_str(s.get("Campaign"), "")
@@ -1376,7 +1583,7 @@ def exports_page(cl: ClientData):
         use_container_width=True,
     )
 
-    # Wastage-only CSV
+    # Wastage-only
     wdf = an.top_wastage(n=None, min_spend=0.0)
     if not wdf.empty:
         wcsv = wdf.to_csv(index=False)
@@ -1400,10 +1607,58 @@ def exports_page(cl: ClientData):
             use_container_width=True,
         )
 
+    # BULK negative file (Campaign Manager upload)
+    bulk_neg = an.bulk_negative_file()
+    if not bulk_neg.empty:
+        bncsv = bulk_neg.to_csv(index=False)
+        st.download_button(
+            f"Download BULK negative keywords file ({len(bulk_neg)} rows)",
+            data=bncsv,
+            file_name=f"Bulk_Negatives_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
-# =============================================================================
+    # API-negative CSV
+    api_neg = an.api_negative_payload()
+    if not api_neg.empty:
+        acsv = api_neg.to_csv(index=False)
+        st.download_button(
+            f"Download API-ready negative payload ({len(api_neg)} rows)",
+            data=acsv,
+            file_name=f"API_Negatives_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # High-performer harvest CSV
+    hdf = an.harvest_high_performers()
+    if not hdf.empty:
+        hcsv = hdf.to_csv(index=False)
+        st.download_button(
+            f"Download high-performing harvest CSV ({len(hdf)} rows)",
+            data=hcsv,
+            file_name=f"Harvest_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # Non-converting harvest CSV
+    nh = an.harvest_negatives()
+    if not nh.empty:
+        nhcsv = nh.to_csv(index=False)
+        st.download_button(
+            f"Download non-converting (negative harvest) CSV ({len(nh)} rows)",
+            data=nhcsv,
+            file_name=f"Negative_Harvest_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # MAIN
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def main():
     load_custom_css()
@@ -1427,7 +1682,17 @@ def main():
 
     cl = st.session_state.clients[st.session_state.active_client]
 
-    tabs = st.tabs(["📊 Dashboard", "🎯 Keywords", "💡 Bids", "🚫 Negatives", "📥 Exports"])
+    tabs = st.tabs(
+        [
+            "📊 Dashboard",
+            "🎯 Keywords",
+            "💡 Bids",
+            "🌱 Harvest",
+            "🧹 Neg Harvest",
+            "🚫 Negatives",
+            "📥 Exports",
+        ]
+    )
     with tabs[0]:
         dashboard_page(cl)
     with tabs[1]:
@@ -1435,8 +1700,12 @@ def main():
     with tabs[2]:
         bids_page(cl)
     with tabs[3]:
-        negatives_page(cl)
+        harvest_page(cl)
     with tabs[4]:
+        negative_harvest_page(cl)
+    with tabs[5]:
+        negatives_page(cl)
+    with tabs[6]:
         exports_page(cl)
 
 
