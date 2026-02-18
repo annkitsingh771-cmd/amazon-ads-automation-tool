@@ -2,19 +2,31 @@
 # -*- coding: utf-8 -*-
 
 """
-Amazon Ads Dashboard Pro v12.2
+Amazon Ads Dashboard Pro – Full v13
 
-- Full v12 feature set:
-  * Multi-client management
-  * TACoS + 20-click rule logic
-  * High-performing keyword harvest
-  * Automated negative harvest
-  * Placement optimization
-  * Bulk bid & negative files
+Features
 
-- Visual fix:
-  * Replaces st.metric for headline KPIs with custom HTML metric cards
-    so large INR values never get truncated or shortened. [web:138]
+- Multi-client sidebar (agency name, clients, upload file per client)
+- Auto-detect columns from Amazon Search Term report (CSV/XLSX)
+- Keyword metrics: ROAS, ACOS, CTR, CVR, TACoS (approx from ad sales)
+- TACoS-aware pause guidance + 20-click rule
+- High-performing keyword harvest (promote to exact/SK)
+- Automated negative harvest (0-order terms above click/spend thresholds)
+- Negative keyword suggestions (campaign vs ad-group level, generic bad terms)
+- Bid suggestions (increase / reduce / pause / salvage-low-bid)
+- Placement optimization (Top of Search vs Product pages etc.)
+- Bulk export files:
+    * Bid updates
+    * Negative keywords (human readable)
+    * Negative keywords (BULK file format)
+    * Negative keywords (API-style payload)
+    * High-performing harvest CSV
+    * Non-converting harvest CSV
+
+Visual fix
+
+- Uses custom HTML metric cards instead of st.metric for headline KPIs so
+  large INR values are never truncated or shortened. [web:138]
 """
 
 import io
@@ -53,176 +65,88 @@ HARVEST_MIN_CLICKS = 10
 HARVEST_MIN_ORDERS = 2
 HARVEST_MIN_ROAS = 2.0
 
-DEFAULT_TACOS_TARGET = 12.0  # % account-level TACoS target band.
+DEFAULT_TACOS_TARGET = 12.0  # % account-level TACoS target band. [web:130]
+
 
 # ---------------------------------------------------------------------------
-# HELPERS / STYLING
+# STYLING + METRIC CARDS
 # ---------------------------------------------------------------------------
-
-def get_excel_writer_engine(preferred: str = "openpyxl") -> str:
-    try:
-        if preferred == "xlsxwriter":
-            import xlsxwriter  # noqa: F401
-            return "xlsxwriter"
-    except Exception:
-        pass
-    return "openpyxl"
-
 
 def load_custom_css():
-    theme_type = "dark"
-    try:
-        theme_type = getattr(st.context.theme, "type", "dark")
-    except Exception:
-        pass
+    css = """
+    <style>
+    .stApp {
+        background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
+    }
+    .main {
+        padding-top: 0.5rem;
+    }
+    .agency-header {
+        background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
+        padding: 1.4rem 1.8rem;
+        border-radius: 18px;
+        margin-bottom: 1.1rem;
+        color: #e5e7eb;
+        box-shadow: 0 18px 50px rgba(15,23,42,0.9);
+        border: 1px solid rgba(148,163,184,0.5);
+    }
+    .agency-header h1 { margin: 0; font-size: 1.5rem; }
+    .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
 
-    if str(theme_type).lower() == "light":
-        css = """
-        <style>
-        .stApp {
-            background: radial-gradient(circle at top, #e5e7eb 0, #e5e7eb 40%, #ffffff 100%);
-        }
-        .main { padding-top: 0.5rem; }
-        .agency-header {
-            background: linear-gradient(135deg, #4f46e5 0, #6366f1 35%, #111827 100%);
-            padding: 1.4rem 1.8rem;
-            border-radius: 18px;
-            margin-bottom: 1.1rem;
-            color: #f9fafb;
-            box-shadow: 0 18px 40px rgba(15,23,42,0.35);
-            border: 1px solid rgba(148,163,184,0.6);
-        }
-        .agency-header h1 { margin: 0; font-size: 1.5rem; }
-        .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
-        .info-box, .success-box, .warning-box, .danger-box {
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
-        }
-        .info-box {
-            background: linear-gradient(135deg, rgba(59,130,246,0.10), #f9fafb);
-            border-left: 4px solid #3b82f6;
-            color: #111827;
-        }
-        .success-box {
-            background: linear-gradient(135deg, rgba(34,197,94,0.1), #ecfdf3);
-            border-left: 4px solid #22c55e;
-            color: #064e3b;
-        }
-        .warning-box {
-            background: linear-gradient(135deg, rgba(250,204,21,0.12), #fefce8);
-            border-left: 4px solid #eab308;
-            color: #78350f;
-        }
-        .danger-box {
-            background: linear-gradient(135deg, rgba(248,113,113,0.16), #fef2f2);
-            border-left: 4px solid #ef4444;
-            color: #7f1d1d;
-        }
-        div[data-testid="stDataFrame"] {
-            border-radius: 14px;
-            border: 1px solid rgba(148,163,184,0.7);
-            overflow: hidden;
-            box-shadow: 0 12px 30px rgba(148,163,184,0.6);
-        }
-        .metric-card {
-            background: radial-gradient(circle at top left, #111827, #020617);
-            border-radius: 14px;
-            padding: 0.9rem 1.0rem;
-            border: 1px solid rgba(148,163,184,0.5);
-            box-shadow: 0 10px 26px rgba(15,23,42,0.65);
-            color: #e5e7eb;
-            white-space: nowrap;
-            overflow: visible;
-        }
-        .metric-label {
-            font-size: 0.82rem;
-            color: #9ca3af;
-            margin-bottom: 0.25rem;
-        }
-        .metric-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-        }
-        </style>
-        """
-    else:
-        css = """
-        <style>
-        .main {
-            padding-top: 0.5rem;
-            background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
-        }
-        .stApp {
-            background: radial-gradient(circle at top, #020617 0, #020617 40%, #000000 100%);
-        }
-        .agency-header {
-            background: radial-gradient(circle at top left, #a855f7 0, #1e293b 35%, #020617 100%);
-            padding: 1.4rem 1.8rem;
-            border-radius: 18px;
-            margin-bottom: 1.1rem;
-            color: #e5e7eb;
-            box-shadow: 0 18px 50px rgba(15,23,42,0.9);
-            border: 1px solid rgba(148,163,184,0.5);
-        }
-        .agency-header h1 { margin: 0; font-size: 1.5rem; }
-        .agency-header p { margin: 0.35rem 0 0 0; font-size: 0.9rem; color: #e0e7ff; }
-        .info-box, .success-box, .warning-box, .danger-box {
-            padding: 0.95rem 1rem;
-            border-radius: 12px;
-            margin-bottom: 0.9rem;
-            font-size: 0.92rem;
-        }
-        .info-box {
-            background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
-            border-left: 4px solid #3b82f6;
-            color: #e5e7eb;
-        }
-        .success-box {
-            background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
-            border-left: 4px solid #22c55e;
-            color: #dcfce7;
-        }
-        .warning-box {
-            background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
-            border-left: 4px solid #eab308;
-            color: #fef9c3;
-        }
-        .danger-box {
-            background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
-            border-left: 4px solid #ef4444;
-            color: #fee2e2;
-        }
-        div[data-testid="stDataFrame"] {
-            border-radius: 14px;
-            border: 1px solid rgba(148,163,184,0.35);
-            overflow: hidden;
-            box-shadow: 0 14px 36px rgba(15,23,42,0.65);
-        }
-        .metric-card {
-            background: radial-gradient(circle at top left, #020617, #020617);
-            border-radius: 14px;
-            padding: 0.9rem 1.0rem;
-            border: 1px solid rgba(148,163,184,0.5);
-            box-shadow: 0 10px 26px rgba(15,23,42,0.85);
-            color: #e5e7eb;
-            white-space: nowrap;
-            overflow: visible;
-        }
-        .metric-label {
-            font-size: 0.82rem;
-            color: #9ca3af;
-            margin-bottom: 0.25rem;
-        }
-        .metric-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-        }
-        </style>
-        """
+    .info-box, .success-box, .warning-box, .danger-box {
+        padding: 0.95rem 1rem;
+        border-radius: 12px;
+        margin-bottom: 0.9rem;
+        font-size: 0.92rem;
+    }
+    .info-box {
+        background: radial-gradient(circle at top left, rgba(59,130,246,0.33), rgba(15,23,42,0.98));
+        border-left: 4px solid #3b82f6;
+        color: #e5e7eb;
+    }
+    .success-box {
+        background: radial-gradient(circle at top left, rgba(34,197,94,0.35), rgba(6,78,59,0.98));
+        border-left: 4px solid #22c55e;
+        color: #dcfce7;
+    }
+    .warning-box {
+        background: radial-gradient(circle at top left, rgba(250,204,21,0.33), rgba(77,54,10,0.98));
+        border-left: 4px solid #eab308;
+        color: #fef9c3;
+    }
+    .danger-box {
+        background: radial-gradient(circle at top left, rgba(248,113,113,0.40), rgba(127,29,29,0.99));
+        border-left: 4px solid #ef4444;
+        color: #fee2e2;
+    }
+    div[data-testid="stDataFrame"] {
+        border-radius: 14px;
+        border: 1px solid rgba(148,163,184,0.35);
+        overflow: hidden;
+        box-shadow: 0 14px 36px rgba(15,23,42,0.65);
+    }
+    .metric-card {
+        background: radial-gradient(circle at top left, #020617, #020617);
+        border-radius: 14px;
+        padding: 0.9rem 1.0rem;
+        border: 1px solid rgba(148,163,184,0.5);
+        box-shadow: 0 10px 26px rgba(15,23,42,0.85);
+        color: #e5e7eb;
+        white-space: nowrap;
+        overflow: visible;
+    }
+    .metric-label {
+        font-size: 0.82rem;
+        color: #9ca3af;
+        margin-bottom: 0.25rem;
+    }
+    .metric-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
+    </style>
+    """
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -237,6 +161,10 @@ def metric_card(label: str, value: str):
         unsafe_allow_html=True,
     )
 
+
+# ---------------------------------------------------------------------------
+# BASIC HELPERS
+# ---------------------------------------------------------------------------
 
 def safe_str(value, default: str = "N/A") -> str:
     try:
@@ -301,8 +229,18 @@ def is_asin(value) -> bool:
     return bool(re.match(r"^[B][0-9A-Z]{9,}$", val.upper()))
 
 
+def get_excel_writer_engine(preferred: str = "openpyxl") -> str:
+    try:
+        if preferred == "xlsxwriter":
+            import xlsxwriter  # noqa: F401
+            return "xlsxwriter"
+    except Exception:
+        pass
+    return "openpyxl"
+
+
 # ---------------------------------------------------------------------------
-# FILE IO + COLUMN DETECTION (same as before)
+# FILE IO + COLUMN DETECTION
 # ---------------------------------------------------------------------------
 
 REQUIRED_HINTS = ["customer search term", "campaign name", "spend", "clicks"]
@@ -408,7 +346,7 @@ def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# ANALYZER (this is the same as your v12 logic)
+# ANALYZER
 # ---------------------------------------------------------------------------
 
 class CompleteAnalyzer:
@@ -445,7 +383,7 @@ class CompleteAnalyzer:
     def _compute_pause_clicks(self) -> int:
         cvr = max(self.product_cvr, 0.1)
         base = 100.0 / cvr
-        pause_clicks = max(20.0, base * self.pause_buffer)
+        pause_clicks = max(20.0, base * self.pause_buffer)  # 20-click minimum data rule.
         return int(math.ceil(pause_clicks))
 
     def _compute_low_vol_min_clicks(self) -> int:
@@ -482,6 +420,7 @@ class CompleteAnalyzer:
         match = self._col(detected, "Match Type")
         cpc = self._col(detected, "CPC")
 
+        # required
         required_missing = [
             k
             for k, v in {
@@ -544,6 +483,7 @@ class CompleteAnalyzer:
             axis=1,
         )
 
+        # TACoS at row level, using ad sales as proxy for total until organic is merged. [web:130]
         out["Total_Sales_for_TACOS"] = out["Sales"]
         out["TACOS"] = out.apply(
             lambda r: (float(r["Spend"]) / float(r["Total_Sales_for_TACOS"]) * 100)
@@ -568,18 +508,512 @@ class CompleteAnalyzer:
         }
         return out
 
-    # summary, pause helpers, TACoS bands, patterns, harvest, negatives, bids,
-    # placements, exports – exactly as in your v12 code
-    # (you can keep that part unchanged from the v12 app I sent earlier).
+    # ---------- summary ----------
 
-    # -------------------------------------------------------------------
-    # Due to space, I won't re-paste every helper again – keep your v12
-    # CompleteAnalyzer methods exactly as they are below this comment.
-    # -------------------------------------------------------------------
+    def summary(self) -> Dict[str, float]:
+        if self.df is None or len(self.df) == 0:
+            return {
+                "spend": 0,
+                "sales": 0,
+                "orders": 0,
+                "clicks": 0,
+                "impr": 0,
+                "wastage": 0,
+                "roas": 0,
+                "acos": 0,
+                "avg_cpc": 0,
+                "avg_ctr": 0,
+                "avg_cvr": 0,
+                "tacos": 0,
+            }
+
+        ts = float(self.df["Spend"].sum())
+        sa = float(self.df["Sales"].sum())
+        od = float(self.df["Orders"].sum())
+        ck = float(self.df["Clicks"].sum())
+        im = float(self.df["Impressions"].sum())
+        wa = float(self.df["Wastage"].sum())
+        roas = sa / ts if ts > 0 else 0.0
+        acos = ts / sa * 100 if sa > 0 else 0.0
+        tacos = ts / sa * 100 if sa > 0 else 0.0
+
+        return {
+            "spend": ts,
+            "sales": sa,
+            "orders": od,
+            "clicks": ck,
+            "impr": im,
+            "wastage": wa,
+            "roas": roas,
+            "acos": acos,
+            "avg_cpc": (ts / ck) if ck > 0 else 0.0,
+            "avg_ctr": float(self.df["CTR"].mean()),
+            "avg_cvr": float(self.df["CVR"].mean()),
+            "tacos": tacos,
+        }
+
+    # ---------- pause / negation helpers ----------
+
+    def _is_price_guardrail_fail(self, r) -> bool:
+        spend = float(r["Spend"])
+        orders = float(r["Orders"])
+        return orders == 0 and spend >= PRICE_SPEND_MULTIPLIER * self.product_price
+
+    def _is_high_click_zero_order(self, r) -> bool:
+        clicks = float(r["Clicks"])
+        orders = float(r["Orders"])
+        return orders == 0 and clicks >= max(self.pause_clicks, self.low_vol_min_clicks)
+
+    def _is_irrelevant_negative(self, r) -> bool:
+        return self._is_high_click_zero_order(r) or self._is_price_guardrail_fail(r)
+
+    def _is_relevant_unprofitable(self, r) -> bool:
+        orders = float(r["Orders"])
+        if orders <= 0:
+            return False
+        acos = float(r["ACOS"])
+        roas = float(r["ROAS"])
+        ta = self.target_acos or 30.0
+        tr = self.target_roas or 3.0
+        return (acos > ta * 1.5) or (roas < tr * 0.5)
+
+    # ---------- TACoS pause band ----------
+
+    def tacos_pause_band(self, tacos_current: float) -> str:
+        tgt = self.tacos_target
+        t = tacos_current
+        if t <= tgt * 0.9:
+            return "Aggressive: TACoS healthy; safe to cut 0-order and very high ACOS keywords."
+        if tgt * 0.9 < t <= tgt * 1.1:
+            return "Neutral: TACoS on target; pause only clear losers, keep ranking/discovery terms."
+        return "Defensive: TACoS high; first lower bids & placements, then prune worst 0-order terms."
+
+    # ---------- generic negative pattern ----------
+
+    def _generic_negative_pattern(self, term: str) -> bool:
+        patt = [
+            r"\bfree\b",
+            r"\bjobs?\b",
+            r"\bcareer\b",
+            r"\bwholesale\b",
+            r"\bbulk\b",
+            r"\bcheap\b",
+            r"\bused\b",
+            r"\bsecond hand\b",
+            r"\bmanual\b",
+            r"\breview\b",
+        ]
+        t = term.lower()
+        return any(re.search(p, t) for p in patt)
+
+    # ---------- harvesting high performers ----------
+
+    def harvest_high_performers(self) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[
+            (df["Clicks"] >= HARVEST_MIN_CLICKS)
+            & (df["Orders"] >= HARVEST_MIN_ORDERS)
+            & (df["ROAS"] >= HARVEST_MIN_ROAS)
+        ]
+        if df.empty:
+            return df
+        out = df[
+            [
+                "Customer Search Term",
+                "Campaign Name",
+                "Ad Group Name",
+                "Match Type",
+                "Clicks",
+                "Orders",
+                "Spend",
+                "Sales",
+                "ROAS",
+                "ACOS",
+                "TACOS",
+            ]
+        ].copy()
+        out["Clicks"] = out["Clicks"].astype(int)
+        out["Orders"] = out["Orders"].astype(int)
+        out["Spend"] = out["Spend"].apply(format_currency)
+        out["Sales"] = out["Sales"].apply(format_currency)
+        out["ROAS"] = out["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        out["ACOS"] = out["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["TACOS"] = out["TACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["Harvest Type"] = "Promote to Exact (SK campaign)"
+        return out
+
+    # ---------- automated negative harvesting ----------
+
+    def harvest_negatives(self) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[(df["Orders"] == 0) & (df["Clicks"] >= max(self.pause_clicks, self.low_vol_min_clicks))]
+        if df.empty:
+            return df
+        df = df.sort_values("Spend", ascending=False)
+        out = df[
+            [
+                "Customer Search Term",
+                "Campaign Name",
+                "Ad Group Name",
+                "Match Type",
+                "Clicks",
+                "Spend",
+                "Impressions",
+                "ACOS",
+                "ROAS",
+                "TACOS",
+            ]
+        ].copy()
+        out["Spend"] = out["Spend"].apply(format_currency)
+        out["ACOS"] = out["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["ROAS"] = out["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+        out["TACOS"] = out["TACOS"].apply(lambda x: f"{float(x):.1f}%")
+        out["Recommended Level"] = "Campaign"
+        out["Recommended Match"] = "Exact"
+        out["Reason"] = (
+            "0 orders after ≥20 clicks (20-click rule) and sufficient spend – add as campaign-level negative exact."
+        )
+        return out
+
+    # ---------- classification ----------
+
+    def classify_keywords(self) -> Dict[str, List[Dict]]:
+        cats = {"scale": [], "test": [], "watch": [], "reduce": [], "pause": []}
+        if self.df is None or len(self.df) == 0:
+            return cats
+
+        for _, r in self.df.iterrows():
+            sp = float(r["Spend"])
+            sa = float(r["Sales"])
+            ro = float(r["ROAS"])
+            o = int(r["Orders"])
+            c = int(r["Clicks"])
+            cv = float(r["CVR"])
+            cpc = float(r["CPC"])
+            tacos = float(r["TACOS"])
+            term = safe_str(r["Customer Search Term"])
+
+            item = {
+                "Keyword": term,
+                "Campaign": safe_str(r["Campaign Name"]),
+                "Ad Group": safe_str(r["Ad Group Name"]),
+                "Match Type": safe_str(r["Match Type"]),
+                "Spend": format_currency(sp),
+                "Sales": format_currency(sa),
+                "Orders": o,
+                "Clicks": c,
+                "ROAS": f"{ro:.2f}x",
+                "ACOS": f"{float(r['ACOS']):.1f}%",
+                "TACOS": f"{tacos:.1f}%",
+                "CVR": f"{cv:.2f}%",
+                "CPC": format_currency(cpc),
+                "Generic Negative Pattern": "Yes" if self._generic_negative_pattern(term) else "",
+                "Reason": "",
+            }
+
+            if sp >= 20 and o >= 1 and ro >= 2.5:
+                item["Reason"] = "Winner (scale +15–25%; keep if TACoS heading down)."
+                cats["scale"].append(item)
+            elif self._is_irrelevant_negative(r):
+                item["Reason"] = (
+                    f"Irrelevant? {c} clicks (20-click rule hit), 0 orders and/or spend ≥ {PRICE_SPEND_MULTIPLIER}× price – "
+                    "candidate for campaign-level negative exact."
+                )
+                cats["pause"].append(item)
+            elif sp >= 30 and ro < 1.0 and c >= 5:
+                item["Reason"] = "Low ROAS (reduce ~30% or salvage with low bid)."
+                cats["reduce"].append(item)
+            elif sp >= 20 and 1.5 <= ro < 2.5 and c >= 3:
+                item["Reason"] = "Good potential (test +10–15%)."
+                cats["test"].append(item)
+            else:
+                item["Reason"] = "Collect more data (watch)."
+                cats["watch"].append(item)
+
+        return cats
+
+    # ---------- bid suggestions ----------
+
+    def bid_suggestions(self) -> List[Dict]:
+        if self.df is None or len(self.df) == 0:
+            return []
+
+        target_roas = self.target_roas or 3.0
+        target_acos = self.target_acos or 30.0
+        suggestions = []
+
+        for _, r in self.df.iterrows():
+            sp = float(r["Spend"])
+            sa = float(r["Sales"])
+            ro = float(r["ROAS"])
+            o = int(r["Orders"])
+            c = int(r["Clicks"])
+            cpc = float(r["CPC"])
+            cv = float(r["CVR"])
+
+            if sp < 20 or c < 3 or cpc <= 0:
+                continue
+
+            acos = (sp / sa * 100) if sa > 0 else 999.0
+            action, change, new_bid, reason = "", 0, cpc, ""
+
+            if self._is_irrelevant_negative(r):
+                action, change, new_bid, reason = (
+                    "PAUSE",
+                    -100,
+                    0.0,
+                    "Irrelevant/non-buying term – 0 orders after ≥20 clicks and high spend. "
+                    "Pause + campaign-level negative exact.",
+                )
+            elif self._is_relevant_unprofitable(r):
+                salvage_bid = cpc * SALVAGE_BID_FACTOR
+                action, change, new_bid, reason = (
+                    "SALVAGE_LOW_BID",
+                    int(-100 * (1 - SALVAGE_BID_FACTOR)),
+                    salvage_bid,
+                    "Relevant but unprofitable – move to salvage bid instead of pausing, to protect rank and TACoS.",
+                )
+            elif ro >= target_roas and o >= 1 and cv >= 1.0:
+                action, change, new_bid, reason = "INCREASE", 15, cpc * 1.15, "Above target ROAS."
+            elif ro < 1.5 and sp >= 30:
+                action, change, new_bid, reason = "REDUCE", -30, cpc * 0.70, "Low ROAS."
+            elif acos > target_acos and sp >= 30:
+                red = min(30, (acos - target_acos) / target_acos * 100)
+                action, change, new_bid, reason = (
+                    "REDUCE",
+                    int(-red),
+                    cpc * (1 - red / 100),
+                    f"ACOS {acos:.1f}% above target.",
+                )
+
+            if action:
+                suggestions.append(
+                    {
+                        "Keyword": safe_str(r["Customer Search Term"]),
+                        "Campaign": safe_str(r["Campaign Name"]),
+                        "Ad Group": safe_str(r["Ad Group Name"]),
+                        "Match Type": safe_str(r["Match Type"]),
+                        "Spend": format_currency(sp),
+                        "Sales": format_currency(sa),
+                        "Orders": o,
+                        "ROAS": f"{ro:.2f}x",
+                        "ACOS": f"{float(r['ACOS']):.1f}%",
+                        "TACOS": f"{float(r['TACOS']):.1f}%",
+                        "CVR": f"{cv:.2f}%",
+                        "Current CPC": format_currency(cpc),
+                        "Action": action,
+                        "Change (%)": change,
+                        "Suggested Bid": format_currency(new_bid) if new_bid > 0 else "₹0.00",
+                        "Reason": reason,
+                    }
+                )
+
+        return suggestions
+
+    # ---------- negatives ----------
+
+    def negative_keywords(self) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+
+        rows = []
+        for _, r in self.df.iterrows():
+            kw = safe_str(r["Customer Search Term"])
+            if not kw:
+                continue
+            campaign = safe_str(r["Campaign Name"])
+            adgroup = safe_str(r["Ad Group Name"])
+            sp = float(r["Spend"])
+            sa = float(r["Sales"])
+            o = int(r["Orders"])
+            acos = float(r["ACOS"])
+            roas = float(r["ROAS"])
+            match_type = "Exact"
+
+            if self._is_irrelevant_negative(r) or self._generic_negative_pattern(kw):
+                reason = (
+                    "Campaign-level negative exact: irrelevant/generic term "
+                    "or 0 orders after ≥20 clicks and significant spend."
+                )
+                rows.append(
+                    {
+                        "Level": "Campaign",
+                        "Campaign Name": campaign,
+                        "Ad Group Name": "",
+                        "Negative Keyword": kw,
+                        "Match Type": match_type,
+                        "Type": "Irrelevant / Generic",
+                        "Spend": format_currency(sp),
+                        "Sales": format_currency(sa),
+                        "Orders": o,
+                        "ACOS": f"{acos:.1f}%",
+                        "ROAS": f"{roas:.2f}x",
+                        "Recommendation": reason,
+                    }
+                )
+            elif self._is_relevant_unprofitable(r):
+                reason = (
+                    "Ad-group-level negative exact: relevant but unprofitable here. "
+                    "Move to dedicated exact campaign at low bid; block in this ad group."
+                )
+                rows.append(
+                    {
+                        "Level": "Ad Group",
+                        "Campaign Name": campaign,
+                        "Ad Group Name": adgroup,
+                        "Negative Keyword": kw,
+                        "Match Type": match_type,
+                        "Type": "Relevant but unprofitable",
+                        "Spend": format_currency(sp),
+                        "Sales": format_currency(sa),
+                        "Orders": o,
+                        "ACOS": f"{acos:.1f}%",
+                        "ROAS": f"{roas:.2f}x",
+                        "Recommendation": reason,
+                    }
+                )
+
+        return pd.DataFrame(rows)
+
+    # ---------- API & BULK negatives ----------
+
+    def api_negative_payload(self) -> pd.DataFrame:
+        neg = self.negative_keywords()
+        if neg.empty:
+            return neg
+        api_rows = []
+        for _, r in neg.iterrows():
+            api_rows.append(
+                {
+                    "campaignId": "",
+                    "adGroupId": "" if r["Level"] == "Campaign" else "",
+                    "keywordText": r["Negative Keyword"],
+                    "matchType": r["Match Type"].upper(),
+                    "state": "ENABLED",
+                    "level": r["Level"],
+                    "note": r["Recommendation"],
+                }
+            )
+        return pd.DataFrame(api_rows)
+
+    def bulk_negative_file(self) -> pd.DataFrame:
+        neg = self.negative_keywords()
+        if neg.empty:
+            return neg
+        rows = []
+        for _, r in neg.iterrows():
+            level = r["Level"]
+            rows.append(
+                {
+                    "Record Type": "Negative Keyword",
+                    "Campaign Name": r["Campaign Name"],
+                    "Ad Group Name": r["Ad Group Name"] if level == "Ad Group" else "",
+                    "Keyword or Product Targeting": r["Negative Keyword"],
+                    "Match Type": r["Match Type"],
+                    "State": "enabled",
+                    "Operation": "create",
+                }
+            )
+        return pd.DataFrame(rows)
+
+    # ---------- placements ----------
+
+    def placement_recommendations(self) -> Dict:
+        res = {"available": False, "table": pd.DataFrame(), "recs": [], "message": ""}
+
+        if self.df is None or len(self.df) == 0:
+            res["message"] = "No data."
+            return res
+
+        placement_cols = [c for c in self.df.columns if "placement" in c.lower()]
+        if not placement_cols:
+            res["message"] = "No placement column found."
+            return res
+
+        col = placement_cols[0]
+        dfp = self.df.copy()
+        dfp[col] = dfp[col].fillna("UNKNOWN").astype(str).str.strip()
+
+        g = (
+            dfp.groupby(col)
+            .agg(
+                Spend=("Spend", "sum"),
+                Sales=("Sales", "sum"),
+                Orders=("Orders", "sum"),
+                Clicks=("Clicks", "sum"),
+                Impressions=("Impressions", "sum"),
+            )
+            .reset_index()
+            .rename(columns={col: "Placement"})
+        )
+
+        g["ROAS"] = g.apply(lambda r: (r["Sales"] / r["Spend"]) if r["Spend"] > 0 else 0.0, axis=1)
+        g["ACOS"] = g.apply(
+            lambda r: (r["Spend"] / r["Sales"] * 100) if r["Sales"] > 0 else 0.0,
+            axis=1,
+        )
+
+        ta = self.target_acos or 30.0
+        tr = self.target_roas or 3.0
+        recs = []
+
+        for _, r in g.iterrows():
+            sp = float(r["Spend"])
+            ro = float(r["ROAS"])
+            ac = float(r["ACOS"])
+            if sp <= 0:
+                continue
+            if ro >= tr or ac <= ta:
+                recs.append(
+                    {
+                        "Placement": r["Placement"],
+                        "Action": "INCREASE",
+                        "Recommendation": "High-performing placement – increase placement bid by 10–20% instead of pausing keywords.",
+                    }
+                )
+            elif ro < 1.0 or ac > ta * 1.5:
+                recs.append(
+                    {
+                        "Placement": r["Placement"],
+                        "Action": "REDUCE",
+                        "Recommendation": "Weak placement – lower placement multiplier 15–30% or to 0%, keep keywords live.",
+                    }
+                )
+            else:
+                recs.append(
+                    {
+                        "Placement": r["Placement"],
+                        "Action": "HOLD",
+                        "Recommendation": "Average placement – minor bid tweaks only; don't pause solely due to placement.",
+                    }
+                )
+
+        res["available"] = True
+        res["table"] = g
+        res["recs"] = recs
+        return res
+
+    # ---------- wastage ----------
+
+    def top_wastage(self, n: Optional[int] = 50, min_spend: float = 0.0) -> pd.DataFrame:
+        if self.df is None or len(self.df) == 0:
+            return pd.DataFrame()
+        df = self.df.copy()
+        df = df[df["Wastage"] > 0]
+        if min_spend and min_spend > 0:
+            df = df[df["Spend"] >= float(min_spend)]
+        df = df.sort_values("Wastage", ascending=False)
+        if n and n > 0:
+            df = df.head(n)
+        return df
 
 
 # ---------------------------------------------------------------------------
-# SESSION / STATE & UI
+# SESSION / STATE
 # ---------------------------------------------------------------------------
 
 class ClientData:
@@ -611,7 +1045,7 @@ def header():
     st.markdown(
         f"""
         <div class="agency-header">
-            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v12.2</h1>
+            <h1>🏢 {st.session_state.agency_name} – Amazon Ads Dashboard Pro v13</h1>
             <p>Full metrics (no truncation) • TACoS-aware rules • placements • negatives • bulk files</p>
         </div>
         """,
@@ -682,7 +1116,7 @@ def sidebar():
                     format="%.1f",
                 )
             with t4:
-                st.caption("Use TACoS to decide how aggressive you can be with pausing.")
+                st.caption("TACoS = Ad spend ÷ Total sales × 100. Lower TACoS with stable sales is ideal. [web:130]")
 
             p1, p2 = st.columns(2)
             with p1:
@@ -841,8 +1275,7 @@ def sidebar():
 
 
 # ---------------------------------------------------------------------------
-# PAGES – only the metric display changed in dashboard_page
-# the rest should be copied from your existing v12 file
+# PAGES
 # ---------------------------------------------------------------------------
 
 def dashboard_page(cl: ClientData):
@@ -944,9 +1377,276 @@ def dashboard_page(cl: ClientData):
         show_df(view, height=320)
 
 
-# keywords_page, bids_page, placement_page, harvest_page, negative_harvest_page,
-# negatives_page, exports_page should be exactly the same as in v12.
-# You can paste them directly under dashboard_page.
+def keywords_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    cats = an.classify_keywords()
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("🏆 Scale", len(cats["scale"]))
+    c2.metric("⚡ Test", len(cats["test"]))
+    c3.metric("👀 Watch", len(cats["watch"]))
+    c4.metric("⚠️ Reduce", len(cats["reduce"]))
+    c5.metric("🚨 Pause / Negatives", len(cats["pause"]))
+
+    tabs = st.tabs(
+        [
+            f"🏆 Scale ({len(cats['scale'])})",
+            f"⚡ Test ({len(cats['test'])})",
+            f"👀 Watch ({len(cats['watch'])})",
+            f"⚠️ Reduce ({len(cats['reduce'])})",
+            f"🚨 Pause / Negatives ({len(cats['pause'])})",
+        ]
+    )
+    with tabs[0]:
+        show_df(pd.DataFrame(cats["scale"]))
+    with tabs[1]:
+        show_df(pd.DataFrame(cats["test"]))
+    with tabs[2]:
+        show_df(pd.DataFrame(cats["watch"]))
+    with tabs[3]:
+        show_df(pd.DataFrame(cats["reduce"]))
+    with tabs[4]:
+        show_df(pd.DataFrame(cats["pause"]))
+
+
+def bids_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    sug = an.bid_suggestions()
+    if not sug:
+        st.info("No bid suggestions yet.")
+        return
+
+    inc = sum(1 for x in sug if x["Action"] == "INCREASE")
+    red = sum(1 for x in sug if x["Action"] == "REDUCE")
+    pau = sum(1 for x in sug if x["Action"] == "PAUSE")
+    salv = sum(1 for x in sug if x["Action"] == "SALVAGE_LOW_BID")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("⬆️ Increase", inc)
+    c2.metric("⬇️ Reduce", red)
+    c3.metric("⏸️ Pause", pau)
+    c4.metric("🛟 Salvage low-bid", salv)
+
+    flt = st.selectbox(
+        "Filter", ["All", "INCREASE", "REDUCE", "PAUSE", "SALVAGE_LOW_BID"], index=0
+    )
+    view = sug if flt == "All" else [x for x in sug if x["Action"] == flt]
+    show_df(pd.DataFrame(view), height=520)
+
+
+def placement_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("📍 Placement optimization (no pause)")
+    st.caption(
+        "Use placement reports to adjust bid multipliers (Top of Search, Product Pages, Rest of Search) "
+        "instead of pausing keywords."
+    )
+
+    res = an.placement_recommendations()
+    if not res["available"]:
+        st.info(res.get("message", "No placement data."))
+        return
+
+    dfp = res["table"].copy()
+    dfp["Spend"] = dfp["Spend"].apply(format_currency)
+    dfp["Sales"] = dfp["Sales"].apply(format_currency)
+    dfp["ROAS"] = dfp["ROAS"].apply(lambda x: f"{float(x):.2f}x")
+    dfp["ACOS"] = dfp["ACOS"].apply(lambda x: f"{float(x):.1f}%")
+    show_df(dfp, height=360)
+
+    st.markdown("#### Recommendations")
+    show_df(pd.DataFrame(res["recs"]), height=260)
+
+
+def harvest_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("🌱 High-performing keyword harvest")
+    hdf = an.harvest_high_performers()
+    if hdf.empty:
+        st.info("No high-performing search terms found with current thresholds.")
+        return
+
+    show_df(hdf, height=520)
+
+
+def negative_harvest_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("🧹 Automated negative harvesting (0-order terms)")
+    neg_h = an.harvest_negatives()
+    if neg_h.empty:
+        st.info("No non-converting terms above thresholds.")
+        return
+
+    show_df(neg_h, height=520)
+
+
+def negatives_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("🚫 Negative keyword suggestions")
+    neg_df = an.negative_keywords()
+    if neg_df.empty:
+        st.info("No negative keyword suggestions yet.")
+        return
+
+    show_df(neg_df, height=520)
+
+
+def exports_page(cl: ClientData):
+    an = cl.analyzer
+    if not an or an.df is None:
+        st.info("Upload a report first.")
+        return
+
+    st.subheader("📥 Exports")
+
+    # BULK bid file
+    sug = an.bid_suggestions()
+    if sug:
+        bulk_rows = []
+        for s in sug:
+            campaign = safe_str(s.get("Campaign"), "")
+            ad_group = safe_str(s.get("Ad Group"), "")
+            keyword = safe_str(s.get("Keyword"), "")
+            match_type = safe_str(s.get("Match Type"), "")
+            action = safe_str(s.get("Action"), "")
+            bid_val = parse_number(s.get("Suggested Bid", 0), 0.0)
+            if not campaign or not ad_group or not keyword:
+                continue
+            row = {
+                "Record Type": "Keyword",
+                "Campaign Name": campaign,
+                "Ad Group Name": ad_group,
+                "Keyword or Product Targeting": keyword,
+                "Match Type": match_type.title() if match_type else "",
+                "Bid": bid_val if bid_val > 0 else "",
+                "State": "enabled",
+                "Operation": "update",
+            }
+            if action == "PAUSE":
+                row["State"] = "paused"
+                row["Bid"] = ""
+            bulk_rows.append(row)
+
+        bulk = pd.DataFrame(bulk_rows)
+        if len(bulk) > 0:
+            out = io.BytesIO()
+            engine = get_excel_writer_engine()
+            with pd.ExcelWriter(out, engine=engine) as wr:
+                bulk.to_excel(wr, index=False, sheet_name="Sponsored Products")
+            out.seek(0)
+            st.download_button(
+                f"Download Amazon BULK bid file ({len(bulk)} rows)",
+                data=out,
+                file_name=f"Bulk_Bids_{cl.name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    # Clean dataset
+    csv = an.df.to_csv(index=False)
+    st.download_button(
+        f"Download cleaned dataset CSV ({len(an.df)} rows)",
+        data=csv,
+        file_name=f"Cleaned_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    # Wastage-only
+    wdf = an.top_wastage(n=None, min_spend=0.0)
+    if not wdf.empty:
+        wcsv = wdf.to_csv(index=False)
+        st.download_button(
+            f"Download wastage-only CSV ({len(wdf)} rows)",
+            data=wcsv,
+            file_name=f"Wastage_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # Negative keyword CSV (human-readable)
+    neg_df = an.negative_keywords()
+    if not neg_df.empty:
+        ncsv = neg_df.to_csv(index=False)
+        st.download_button(
+            f"Download negative keyword CSV ({len(neg_df)} rows)",
+            data=ncsv,
+            file_name=f"Negatives_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # BULK negative file (Campaign Manager upload)
+    bulk_neg = an.bulk_negative_file()
+    if not bulk_neg.empty:
+        bncsv = bulk_neg.to_csv(index=False)
+        st.download_button(
+            f"Download BULK negative keywords file ({len(bulk_neg)} rows)",
+            data=bncsv,
+            file_name=f"Bulk_Negatives_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # API-negative CSV
+    api_neg = an.api_negative_payload()
+    if not api_neg.empty:
+        acsv = api_neg.to_csv(index=False)
+        st.download_button(
+            f"Download API-ready negative payload ({len(api_neg)} rows)",
+            data=acsv,
+            file_name=f"API_Negatives_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # High-performer harvest CSV
+    hdf = an.harvest_high_performers()
+    if not hdf.empty:
+        hcsv = hdf.to_csv(index=False)
+        st.download_button(
+            f"Download high-performing harvest CSV ({len(hdf)} rows)",
+            data=hcsv,
+            file_name=f"Harvest_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # Non-converting harvest CSV
+    nh = an.harvest_negatives()
+    if not nh.empty:
+        nhcsv = nh.to_csv(index=False)
+        st.download_button(
+            f"Download non-converting (negative harvest) CSV ({len(nh)} rows)",
+            data=nhcsv,
+            file_name=f"Negative_Harvest_{cl.name}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
 
 # ---------------------------------------------------------------------------
 # MAIN
@@ -973,6 +1673,14 @@ def main():
         return
 
     cl = st.session_state.clients[st.session_state.active_client]
+
+    # Ensure analyzer exists
+    if not cl.analyzer or cl.analyzer.df is None:
+        st.markdown(
+            '<div class="warning-box">This client has no analyzer data yet. Upload a Search Term report in the sidebar.</div>',
+            unsafe_allow_html=True,
+        )
+        return
 
     tabs = st.tabs(
         [
